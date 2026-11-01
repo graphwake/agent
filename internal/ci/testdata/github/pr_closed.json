@@ -1,0 +1,12 @@
+{
+  "action": "closed",
+  "number": 42,
+  "pull_request": {
+    "number": 42,
+    "html_url": "https://github.com/acme/orders/pull/42",
+    "merged": false,
+    "user": { "login": "octocat" },
+    "head": { "sha": "1111111111111111111111111111111111111111" }
+  },
+  "repository": { "default_branch": "main" }
+}

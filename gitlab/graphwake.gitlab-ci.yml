@@ -1,0 +1,33 @@
+# Graphwake spec upload for GitLab CI.
+#
+# Include this file and extend the hidden job:
+#
+#   include:
+#     - remote: https://raw.githubusercontent.com/graphwake/agent/v0.1.0/gitlab/graphwake.gitlab-ci.yml
+#
+#   graphwake:
+#     extends: .graphwake-upload
+#     needs: [build]                 # the job that produced the spec, if any
+#     variables:
+#       GRAPHWAKE_SPEC: build/openapi.json
+#
+# Add GRAPHWAKE_KEY as a masked CI/CD variable (Settings > CI/CD > Variables). Leave it unprotected if merge
+# request pipelines from unprotected branches should send drafts.
+#
+# The job runs in merge request pipelines and on the default branch (plus any branch matching
+# GRAPHWAKE_LIVE_BRANCH, which you can set to e.g. "main,release/*"). It never fails the pipeline.
+
+.graphwake-upload:
+  image:
+    name: ghcr.io/graphwake/agent:0.1.0
+    entrypoint: [""]
+  stage: deploy
+  variables:
+    GIT_DEPTH: "1"
+  script:
+    - graphwake upload || true
+  allow_failure: true
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $GRAPHWAKE_LIVE_BRANCH && $CI_COMMIT_BRANCH

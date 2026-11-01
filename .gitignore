@@ -1,0 +1,51 @@
+# Secrets / credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+id_rsa*
+id_ed25519*
+credentials*.json
+*.secret
+.npmrc
+.netrc
+
+# Go build output
+/graphwake
+/graphwake.exe
+/bin/
+/dist/
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.*
+*.coverprofile
+go.work
+go.work.sum
+
+# Node (Azure DevOps task)
+node_modules/
+npm-debug.log*
+yarn-error.log*
+*.vsix
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code local files
+.claude/settings.local.json

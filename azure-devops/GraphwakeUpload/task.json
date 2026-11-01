@@ -1,0 +1,56 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Microsoft/azure-pipelines-task-lib/master/tasks.schema.json",
+  "id": "1a59f93e-44c0-4688-86d0-47a3af7fe6a6",
+  "name": "GraphwakeUpload",
+  "friendlyName": "Graphwake spec upload",
+  "description": "Send your service's OpenAPI spec to Graphwake from pull request and default-branch builds. Never fails the pipeline.",
+  "helpMarkDown": "Downloads the graphwake agent (checksum verified) and runs `graphwake upload`. See https://github.com/graphwake/agent.",
+  "category": "Utility",
+  "author": "Graphwake",
+  "version": { "Major": 0, "Minor": 1, "Patch": 0 },
+  "instanceNameFormat": "Upload spec to Graphwake",
+  "minimumAgentVersion": "3.232.1",
+  "inputs": [
+    {
+      "name": "spec",
+      "type": "string",
+      "label": "Spec",
+      "required": true,
+      "helpMarkDown": "Path to the OpenAPI spec file, or an http(s) URL to read it from."
+    },
+    {
+      "name": "key",
+      "type": "string",
+      "label": "Ingest key",
+      "required": true,
+      "helpMarkDown": "The service's ingest key. Use a secret variable, e.g. $(GRAPHWAKE_KEY)."
+    },
+    {
+      "name": "url",
+      "type": "string",
+      "label": "Graphwake API URL",
+      "required": false,
+      "defaultValue": "",
+      "helpMarkDown": "Leave empty for the default."
+    },
+    {
+      "name": "liveBranch",
+      "type": "string",
+      "label": "Live branches",
+      "required": false,
+      "defaultValue": "",
+      "helpMarkDown": "Branches whose builds publish the live spec, comma-separated, globs allowed (e.g. main,release/*). Default: main or master."
+    },
+    {
+      "name": "agentVersion",
+      "type": "string",
+      "label": "Agent version",
+      "required": false,
+      "defaultValue": "0.1.0",
+      "helpMarkDown": "Release of github.com/graphwake/agent to download."
+    }
+  ],
+  "execution": {
+    "Node20_1": { "target": "index.js", "argumentFormat": "" }
+  }
+}

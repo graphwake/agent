@@ -1,0 +1,86 @@
+name: Graphwake spec upload
+description: Send your service's OpenAPI spec to Graphwake from pull requests and default-branch builds. Never fails the workflow.
+author: Graphwake
+branding:
+  icon: upload-cloud
+  color: blue
+
+inputs:
+  spec:
+    description: Path to the OpenAPI spec file, or an http(s) URL to read it from (e.g. http://localhost:5000/swagger/v1/swagger.json).
+    required: true
+  key:
+    description: The service's ingest key (dsk_...). Pass it from a secret, e.g. secrets.GRAPHWAKE_KEY.
+    required: true
+  url:
+    description: Graphwake API URL. Leave empty for the default.
+    required: false
+    default: ""
+  live-branch:
+    description: Branches whose builds publish the live spec (comma-separated, globs allowed, e.g. "main,release/*"). Default is the repository's default branch.
+    required: false
+    default: ""
+  version:
+    description: Agent version to download (a release of github.com/graphwake/agent).
+    required: false
+    default: "0.1.0"
+  github-token:
+    description: Token used to find the merged pull request and check the branch tip. The default job token is enough.
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Upload spec to Graphwake
+      shell: bash
+      env:
+        GRAPHWAKE_SPEC: ${{ inputs.spec }}
+        GRAPHWAKE_KEY: ${{ inputs.key }}
+        GRAPHWAKE_URL: ${{ inputs.url }}
+        GRAPHWAKE_LIVE_BRANCH: ${{ inputs.live-branch }}
+        GRAPHWAKE_VERSION: ${{ inputs.version }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        # Never fail the workflow: every problem is a warning and the step exits 0.
+        set -u
+        warn() { echo "::warning::graphwake: $1"; exit 0; }
+        # Mask the key in the log even when it does not come from a secret.
+        if [ -n "${GRAPHWAKE_KEY}" ]; then echo "::add-mask::${GRAPHWAKE_KEY}"; fi
+
+        case "${RUNNER_OS}" in
+          Linux) os=linux; ext=tar.gz; bin=graphwake ;;
+          macOS) os=darwin; ext=tar.gz; bin=graphwake ;;
+          Windows) os=windows; ext=zip; bin=graphwake.exe ;;
+          *) warn "unsupported runner OS ${RUNNER_OS}, spec not sent" ;;
+        esac
+        case "${RUNNER_ARCH}" in
+          X64) arch=amd64 ;;
+          ARM64) arch=arm64 ;;
+          *) warn "unsupported runner architecture ${RUNNER_ARCH}, spec not sent" ;;
+        esac
+
+        version="${GRAPHWAKE_VERSION#v}"
+        archive="graphwake_${version}_${os}_${arch}.${ext}"
+        base="https://github.com/graphwake/agent/releases/download/v${version}"
+        dir="${RUNNER_TEMP:-/tmp}/graphwake-${version}"
+        mkdir -p "$dir" || warn "cannot create a work folder, spec not sent"
+
+        if [ ! -x "$dir/$bin" ]; then
+          curl -fsSL --retry 3 -o "$dir/$archive" "$base/$archive" || warn "could not download the agent ${version}, spec not sent"
+          curl -fsSL --retry 3 -o "$dir/checksums.txt" "$base/checksums.txt" || warn "could not download the agent checksums, spec not sent"
+          expected="$(awk -v f="$archive" '$2 == f { print $1 }' "$dir/checksums.txt")"
+          if command -v sha256sum >/dev/null 2>&1; then
+            actual="$(sha256sum "$dir/$archive" | awk '{ print $1 }')"
+          else
+            actual="$(shasum -a 256 "$dir/$archive" | awk '{ print $1 }')"
+          fi
+          [ -n "$expected" ] && [ "$expected" = "$actual" ] || warn "agent checksum mismatch, spec not sent"
+          if [ "$ext" = zip ]; then
+            unzip -oq "$dir/$archive" "$bin" -d "$dir" || warn "could not unpack the agent, spec not sent"
+          else
+            tar -xzf "$dir/$archive" -C "$dir" "$bin" || warn "could not unpack the agent, spec not sent"
+          fi
+        fi
+
+        "$dir/$bin" upload || true

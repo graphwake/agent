@@ -1,0 +1,21 @@
+{
+  "manifestVersion": 1,
+  "id": "graphwake-agent",
+  "name": "Graphwake",
+  "version": "0.1.0",
+  "publisher": "graphwake",
+  "description": "Send your service's OpenAPI spec to Graphwake from Azure Pipelines. Breaking changes reach the teams that use the API before they ship.",
+  "public": false,
+  "categories": ["Azure Pipelines"],
+  "targets": [{ "id": "Microsoft.VisualStudio.Services" }],
+  "tags": ["openapi", "api", "breaking changes"],
+  "files": [{ "path": "GraphwakeUpload" }],
+  "contributions": [
+    {
+      "id": "graphwake-upload-task",
+      "type": "ms.vss-distributed-task.task",
+      "targets": ["ms.vss-distributed-task.tasks"],
+      "properties": { "name": "GraphwakeUpload" }
+    }
+  ]
+}

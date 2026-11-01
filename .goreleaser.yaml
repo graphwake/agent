@@ -1,0 +1,75 @@
+# GoReleaser v2 configuration for the graphwake CI agent.
+# Run from this folder (agent/). Releases are tagged vX.Y.Z; see release/github-workflow.yml.
+version: 2
+
+project_name: graphwake
+
+builds:
+  - id: graphwake
+    main: ./cmd/graphwake
+    binary: graphwake
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+
+archives:
+  - id: graphwake
+    # graphwake_<version>_<os>_<arch>.tar.gz (zip on Windows). The GitHub Action, the Azure DevOps task
+    # and the README rely on this name.
+    name_template: "graphwake_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+dockers:
+  - id: graphwake-amd64
+    image_templates: ["ghcr.io/graphwake/agent:{{ .Version }}-amd64"]
+    dockerfile: Dockerfile
+    use: buildx
+    goos: linux
+    goarch: amd64
+    build_flag_templates:
+      - --platform=linux/amd64
+      - --label=org.opencontainers.image.version={{ .Version }}
+      - --label=org.opencontainers.image.source=https://github.com/graphwake/agent
+  - id: graphwake-arm64
+    image_templates: ["ghcr.io/graphwake/agent:{{ .Version }}-arm64"]
+    dockerfile: Dockerfile
+    use: buildx
+    goos: linux
+    goarch: arm64
+    build_flag_templates:
+      - --platform=linux/arm64
+      - --label=org.opencontainers.image.version={{ .Version }}
+      - --label=org.opencontainers.image.source=https://github.com/graphwake/agent
+
+docker_manifests:
+  - name_template: "ghcr.io/graphwake/agent:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/graphwake/agent:{{ .Version }}-amd64"
+      - "ghcr.io/graphwake/agent:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/graphwake/agent:latest"
+    image_templates:
+      - "ghcr.io/graphwake/agent:{{ .Version }}-amd64"
+      - "ghcr.io/graphwake/agent:{{ .Version }}-arm64"
+
+release:
+  github:
+    owner: graphwake
+    name: agent
+  draft: true
+
+changelog:
+  disable: true

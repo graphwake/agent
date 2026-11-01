@@ -1,0 +1,8 @@
+{
+  "ref": "refs/heads/trunk",
+  "head_commit": {
+    "message": "Merge pull request #42 from acme/feature\n\nAdd orders endpoint",
+    "timestamp": "2026-10-30T10:00:00+03:00"
+  },
+  "repository": { "default_branch": "trunk" }
+}
