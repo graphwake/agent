@@ -118,8 +118,10 @@ jobs:
 
 The `closed` type lets the agent report pull requests closed without merging. The action downloads the pinned
 agent release for the runner's OS and architecture, verifies its SHA-256 against `checksums.txt` and runs it.
-Inputs: `spec`, `key`, `url`, `live-branch`, `version`, `github-token` (defaults to the job token; it needs
-`contents: read` and `pull-requests: read`, the defaults for most repositories).
+Inputs: `spec`, `key`, `url`, `live-branch`, `version`, `github-token` (defaults to the job token). The branch tip
+check needs only `contents: read`; finding the merged pull request needs `pull-requests: read`. If your workflow
+sets `permissions:`, list both there. To publish from more branches, set `live-branch` and add the same branches
+to the `push` trigger.
 
 Pull requests from forks get no secrets; the step then prints a warning and sends nothing.
 
@@ -199,7 +201,7 @@ definitions:
     - step: &graphwake
         name: API spec
         script:
-          - # ... produce openapi.json
+          - ./build-openapi.sh   # produce openapi.json
           - >-
             VERSION=0.1.0; BASE=https://github.com/graphwake/agent/releases/download/v$VERSION;
             ARCHIVE=graphwake_${VERSION}_linux_amd64.tar.gz;
