@@ -60,9 +60,6 @@ Every setting can be given as a flag or as an environment variable. A flag wins 
 
 `graphwake version` prints the version.
 
-The old `DOCSYNC_*` names (`DOCSYNC_KEY`, `DOCSYNC_URL`, `DOCSYNC_SPEC`, ...) still work as fallbacks and are
-**deprecated**; use `GRAPHWAKE_*`.
-
 ## How the build is classified
 
 | Platform | Pull request build | Live build |
@@ -314,3 +311,7 @@ placeholder).
 
 The default API address (`https://api.graphwake.com`, the production domain) lives
 in one place: `DefaultAPIURL` in `internal/cli/config.go`.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
