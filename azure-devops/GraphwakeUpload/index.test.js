@@ -1,5 +1,5 @@
-// Run with: node --test azure-devops/GraphwakeUpload/   (Node 20+). Checks that download() never hangs, which exit
-// code the task passes on and where the build token comes from.
+// Run with: node --test azure-devops/GraphwakeUpload/index.test.js   (Node 20+). Checks that download() never hangs,
+// which exit code the task passes on and where the build token comes from.
 "use strict";
 
 const assert = require("node:assert");

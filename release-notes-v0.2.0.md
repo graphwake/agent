@@ -11,7 +11,7 @@ The agent still **never fails your pipeline unless you turn on `--fail-on`**. Wi
 - **Optional check, `--fail-on breaking|affected`** (`GRAPHWAKE_FAIL_ON`): `breaking` fails the pull request build on any breaking change, `affected` (recommended) only when a breaking change affects at least one subscribed team. Off by default. Default-branch builds never fail.
 - **Escape hatch:** the label `graphwake-accept-breaking` on the pull request lets a failing check pass. Labels are read when the agent runs, so re-running the check after adding the label is enough.
 - **GitHub Action:** new inputs `fail-on` and `comment`; the action fails the step only when the agent exits 1. The workflow needs `pull-requests: write` to comment.
-- **Azure DevOps task `GraphwakeUpload@0`** (0.2.0): new inputs `failOn` and `comment`; the task hands the build's own token to the agent and fails the step only when the agent exits 1. The `<Project> Build Service` identity needs "Contribute to pull requests: Allow" on the repository.
+- **Azure DevOps task `GraphwakeUpload@0`** (0.2.0): new inputs `failOn` and `comment`; map `SYSTEM_ACCESSTOKEN: $(System.AccessToken)` in the step's `env` so the agent can comment and read labels (the task also tries the token Azure hands every task, but the mapping is the reliable path). The task fails the step only when the agent exits 1. The `<Project> Build Service` identity needs "Contribute to pull requests: Allow" on the repository.
 - **Bounded:** all GitHub and Azure DevOps API calls of a run share a 10-second budget; the CI token is never printed.
 
 ### Install
@@ -49,9 +49,11 @@ jobs:
     spec: openapi.json
     key: $(GRAPHWAKE_KEY)
     # failOn: affected   # optional
+  env:
+    SYSTEM_ACCESSTOKEN: $(System.AccessToken)
 ```
 
-In a script step instead of the task, map the build's token so the agent can comment: `SYSTEM_ACCESSTOKEN: $(System.AccessToken)` under `env`.
+In a script step instead of the task, map the build's token the same way: `SYSTEM_ACCESSTOKEN: $(System.AccessToken)` under `env`.
 
 **GitLab CI**
 
@@ -99,8 +101,8 @@ SHA-256 checksums are in `checksums.txt`. The multi-arch Docker image `ghcr.io/g
 
 ### Notes
 
-- **Comments and `--fail-on` work on GitHub Actions and on Azure Pipelines with Azure Repos only.** GitLab CI, Bitbucket Pipelines, Jenkins, other CIs and Azure Pipelines building a GitHub or Bitbucket repository get no comment yet, and `--fail-on` is not applied there: the agent warns `--fail-on is not supported on this CI yet; not failing` and exits 0.
-- **Without the CI token** (`GITHUB_TOKEN`, or `SYSTEM_ACCESSTOKEN` on Azure DevOps) the agent writes no comment and warns; `--fail-on` still applies, but the label cannot be read. The GitHub Action and the Azure DevOps task pass the token for you.
+- **Comments and `--fail-on` work on GitHub Actions and on Azure Pipelines with Azure Repos only.** GitLab CI, Bitbucket Pipelines, Jenkins, other CIs and Azure Pipelines building a repository not hosted in Azure Repos (GitHub, Bitbucket or another Git host) get no comment yet, and `--fail-on` is not applied there: the agent warns `--fail-on is not supported on this CI yet; not failing` and exits 0.
+- **Without the CI token** (`GITHUB_TOKEN`, or `SYSTEM_ACCESSTOKEN` on Azure DevOps) the agent writes no comment and warns; `--fail-on` still applies, but the label cannot be read. The GitHub Action passes the job token for you; on Azure DevOps, map `SYSTEM_ACCESSTOKEN: $(System.AccessToken)` in the step's `env`.
 - **Using `--fail-on` in your own script step:** remove `|| true` / `|| echo` after the agent and `continueOnError: true`, so exit 1 reaches the pipeline. The README has an Azure DevOps script step written this way.
 - **Azure DevOps task version:** the task stays on major version 0 (`GraphwakeUpload@0`), so pipelines on `@0` get the comment once the extension is updated. Once the extension is public, behaviour changes will ship as a new major version.
 - Needs a Graphwake server that returns the pull request outcome. With an older server the agent sends the spec as before and, if `--fail-on` is set, warns `the server did not return a check result; not failing`.

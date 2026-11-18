@@ -173,8 +173,9 @@ These never fail the build, with or without `--fail-on`; each is a warning:
 **Without the CI token.** The agent comments and reads labels with `GITHUB_TOKEN` on GitHub and `SYSTEM_ACCESSTOKEN`
 on Azure DevOps. If the token is missing, the agent writes no comment and warns `no GITHUB_TOKEN: cannot comment on
 the pull request or read its labels` (on Azure: `no SYSTEM_ACCESSTOKEN: ...`). `--fail-on` still applies, but the
-label cannot be seen, so a failed check cannot be accepted. The GitHub Action and the Azure DevOps task pass the token
-for you; in script and Docker steps, map it as the platform sections show.
+label cannot be seen, so a failed check cannot be accepted. The GitHub Action passes the job token for you; on Azure
+DevOps, map `SYSTEM_ACCESSTOKEN: $(System.AccessToken)` in the step's `env` (task, script or Docker), as the
+[Azure DevOps](#azure-devops) section shows.
 
 ### Where it works
 
@@ -182,7 +183,7 @@ for you; in script and Docker steps, map it as the platform sections show.
 |---|---|---|
 | GitHub Actions | yes | yes |
 | Azure Pipelines, Azure Repos repository | yes | yes |
-| Azure Pipelines building a GitHub or Bitbucket repository | no | not applied |
+| Azure Pipelines building a repository not hosted in Azure Repos (GitHub, Bitbucket or another Git host) | no | not applied |
 | GitLab CI, Bitbucket Pipelines, Jenkins, any other CI | not yet | not applied |
 
 Where `--fail-on` is not applied, the agent warns `--fail-on is not supported on this CI yet; not failing` and exits 0.
@@ -271,13 +272,15 @@ steps:
       spec: openapi.json
       key: $(GRAPHWAKE_KEY)
       # failOn: affected   # optional: fail the pull request on breaking changes that affect a subscribed team
+    env:
+      SYSTEM_ACCESSTOKEN: $(System.AccessToken)
 ```
 
 `GRAPHWAKE_KEY` is a secret pipeline variable. Inputs: `spec`, `key`, `url`, `liveBranch`, `failOn` (empty,
-`breaking` or `affected`; default empty, never fails), `comment` (default `true`), `agentVersion`. The task gives
-the agent the build's own token (`System.AccessToken`) for the comment and the labels; nothing needs to be added to
-the YAML. If the log still shows `no SYSTEM_ACCESSTOKEN`, add `env: SYSTEM_ACCESSTOKEN: $(System.AccessToken)` to
-the task step. The task fails the step only when the agent exits 1 (a failed check with `failOn` set).
+`breaking` or `affected`; default empty, never fails), `comment` (default `true`), `agentVersion`. The
+`SYSTEM_ACCESSTOKEN: $(System.AccessToken)` mapping gives the agent the build's own token for the comment and the
+labels; keep it in the step. Without it the task also tries the token Azure hands every task, but the mapping is the
+reliable path. The task fails the step only when the agent exits 1 (a failed check with `failOn` set).
 
 **Permission for the comment.** The build's identity needs to write to pull requests:
 
@@ -289,8 +292,8 @@ If the pipeline runs with the organization-wide job scope, the identity is `Proj
 (<Organization>)`: give it the same permission. Without it the agent prints `could not comment on the pull request
 (HTTP 403)` and the build goes on; `failOn` still applies.
 
-Comments and `failOn` work for Azure Repos repositories only. Azure Pipelines building a GitHub or Bitbucket
-repository gets no comment and `failOn` is not applied.
+Comments and `failOn` work for Azure Repos repositories only. Azure Pipelines building a repository not hosted in
+Azure Repos (GitHub, Bitbucket or another Git host) gets no comment and `failOn` is not applied.
 
 Without the extension, run the binary from a script step:
 
