@@ -1,5 +1,6 @@
 // Package cli is the graphwake command: it reads the configuration, detects the CI context, decides what to send
-// and sends it. Whatever happens it prints one line and never asks for a failing exit code.
+// and sends it. Whatever happens it prints one line. The exit code is 0 except when --fail-on was given on an open
+// pull request build and the server's check failed.
 package cli
 
 import (
@@ -27,7 +28,7 @@ type Deps struct {
 	Getenv   ci.Getenv
 	ReadFile ci.ReadFile
 	Git      gitx.Runner
-	// HTTP is used for the ingest call and the GitHub API.
+	// HTTP is used for the ingest call and the GitHub and Azure DevOps APIs.
 	HTTP           *http.Client
 	Spec           *spec.Reader
 	Sleep          func(context.Context, time.Duration)
@@ -36,6 +37,8 @@ type Deps struct {
 	// IngestDeadline caps the whole send (retries included); IngestAttempt caps one request.
 	IngestDeadline time.Duration
 	IngestAttempt  time.Duration
+	// PlatformDeadline caps all GitHub / Azure DevOps calls of the pull request step of one run together.
+	PlatformDeadline time.Duration
 }
 
 // DefaultDeps returns the production wiring.
@@ -53,6 +56,8 @@ func DefaultDeps(version string, out io.Writer) Deps {
 		Sleep:          spec.SleepContext,
 		IngestAttempts: 3,
 		IngestBackoff:  2 * time.Second,
+
+		PlatformDeadline: defaultPlatformDeadline,
 	}
 }
 
@@ -62,8 +67,9 @@ commands:
   graphwake upload --spec <file|http(s)-url> [flags]   send the spec (see "graphwake upload -h")
   graphwake version                                    print the version`
 
-// Main runs the command. It never fails: every problem is one printed line.
-func Main(args []string, d Deps) {
+// Main runs the command and returns the exit code. Every problem is one printed line and exit code 0; only a
+// failed --fail-on check returns 1.
+func Main(args []string, d Deps) int {
 	r := &report.Reporter{W: d.Out, Platform: ci.Other}
 	if d.Getenv != nil {
 		r.Hide(d.Getenv("GRAPHWAKE_KEY"))
@@ -71,22 +77,23 @@ func Main(args []string, d Deps) {
 	}
 	if len(args) == 0 {
 		r.Info("%s", "no command given; use \"graphwake upload --spec <file|url>\" or \"graphwake version\"")
-		return
+		return 0
 	}
 	switch args[0] {
 	case "version", "--version", "-version":
 		io.WriteString(d.Out, "graphwake "+d.Version+"\n")
 	case "upload":
-		upload(args[1:], d)
+		return upload(args[1:], d)
 	case "help", "-h", "--help":
 		io.WriteString(d.Out, usage+"\n")
 	default:
 		// Never the argument itself: it may be the key passed by mistake.
 		r.Warn("%s", "unknown command; use \"graphwake upload\" or \"graphwake version\"")
 	}
+	return 0
 }
 
-func upload(args []string, d Deps) {
+func upload(args []string, d Deps) int {
 	ctx := context.Background()
 	info := ci.Detect(d.Getenv, d.ReadFile)
 	r := &report.Reporter{W: d.Out, Platform: info.Platform}
@@ -102,19 +109,19 @@ func upload(args []string, d Deps) {
 	r.Hide(cfg.Key)
 	if errors.Is(err, errHelp) {
 		io.WriteString(d.Out, uploadUsage+"\n")
-		return
+		return 0
 	}
 	if err != nil {
 		r.Warn("%s; nothing sent", err.Error())
-		return
+		return 0
 	}
 	if cfg.Key == "" {
 		r.Warn("GRAPHWAKE_KEY is not set; nothing sent")
-		return
+		return 0
 	}
 	if !spec.IsURL(cfg.URL) {
 		r.Warn("GRAPHWAKE_URL must be an http(s) URL; nothing sent")
-		return
+		return 0
 	}
 
 	head := completeCommit(ctx, d.Git, &info)
@@ -125,11 +132,11 @@ func upload(args []string, d Deps) {
 		} else {
 			r.Info("%s", p.skip)
 		}
-		return
+		return 0
 	}
 	if p.needSpec && cfg.Spec == "" {
 		r.Warn("no spec given (--spec or GRAPHWAKE_SPEC); nothing sent")
-		return
+		return 0
 	}
 
 	gh := github.API{BaseURL: info.APIURL, Repo: info.Repo, Token: info.Token, HTTP: d.HTTP}
@@ -140,12 +147,12 @@ func upload(args []string, d Deps) {
 	if p.guardBranch != "" && head != "" && info.CommitSHA != "" &&
 		!strings.EqualFold(head, info.CommitSHA) {
 		r.Info("the checked-out commit is not the commit this build is for, live spec not sent")
-		return
+		return 0
 	}
 	if p.guardBranch != "" && info.CommitSHA != "" {
 		if tip := branchTip(ctx, gh, d.Git, p.guardBranch); tip != "" && !strings.EqualFold(tip, info.CommitSHA) {
 			r.Info("this build is not the tip of %s (a newer build sends the live spec), nothing sent", p.guardBranch)
-			return
+			return 0
 		}
 	}
 	if p.findMerged {
@@ -157,18 +164,21 @@ func upload(args []string, d Deps) {
 		content, err := d.Spec.Read(ctx, cfg.Spec)
 		if errors.Is(err, spec.ErrTooLarge) {
 			r.Warn("%s", ingest.ErrBodyTooLarge.Error())
-			return
+			return 0
 		}
 		if err != nil {
 			r.Warn("%s; nothing sent", err.Error())
-			return
+			return 0
 		}
 		body.Spec = &content
 	}
+	// The pull request step (comment and --fail-on) on open pull request builds only.
+	pr := newPRStep(cfg, info, p, gh, d)
+	body.PullRequest = pr.hints(ctx)
 	encoded, err := ingest.Encode(body)
 	if err != nil {
 		r.Warn("%s", err.Error())
-		return
+		return 0
 	}
 
 	client := ingest.Client{
@@ -184,10 +194,10 @@ func upload(args []string, d Deps) {
 	}
 	res := client.Send(ctx, encoded)
 	if !res.OK {
-		r.Warn("%s", res.Warning)
-		return
+		pr.failure(r, res.Warning)
+		return 0
 	}
-	r.Info("%s", successLine(p.ctx))
+	return pr.finish(ctx, r, successLine(p.ctx), res.PR)
 }
 
 // completeCommit fills the commit SHA and time from git when the platform did not give them and returns

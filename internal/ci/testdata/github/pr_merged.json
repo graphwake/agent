@@ -8,5 +8,5 @@
     "user": { "login": "octocat" },
     "head": { "sha": "1111111111111111111111111111111111111111" }
   },
-  "repository": { "default_branch": "main" }
+  "repository": { "default_branch": "main", "private": true }
 }

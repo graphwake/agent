@@ -1,5 +1,5 @@
 name: Graphwake spec upload
-description: Send your service's OpenAPI spec to Graphwake from pull requests and default-branch builds. Never fails the workflow.
+description: Send your service's OpenAPI spec to Graphwake from pull requests and default-branch builds, and comment on the pull request with the breaking changes. Never fails the workflow unless you set fail-on.
 author: Graphwake
 branding:
   icon: upload-cloud
@@ -20,12 +20,20 @@ inputs:
     description: Branches whose builds publish the live spec (comma-separated, globs allowed, e.g. "main,release/*"). Default is the repository's default branch.
     required: false
     default: ""
+  fail-on:
+    description: Fail an open pull request build on breaking changes, "breaking" (any) or "affected" (only when a subscribed team is affected). The label graphwake-accept-breaking on the pull request lets it pass. Empty (the default) never fails.
+    required: false
+    default: ""
+  comment:
+    description: Comment on the pull request with the breaking changes and the affected teams ("true" or "false"). Needs pull-requests write permission.
+    required: false
+    default: "true"
   version:
     description: Agent version to download (a release of github.com/graphwake/agent).
     required: false
-    default: "0.1.0"
+    default: "0.2.0"
   github-token:
-    description: Token used to find the merged pull request and check the branch tip. The default job token is enough.
+    description: Token used to find the merged pull request, check the branch tip, read the pull request labels and write the comment. The default job token is enough.
     required: false
     default: ${{ github.token }}
 
@@ -39,10 +47,13 @@ runs:
         GRAPHWAKE_KEY: ${{ inputs.key }}
         GRAPHWAKE_URL: ${{ inputs.url }}
         GRAPHWAKE_LIVE_BRANCH: ${{ inputs.live-branch }}
+        GRAPHWAKE_FAIL_ON: ${{ inputs.fail-on }}
+        GRAPHWAKE_COMMENT: ${{ inputs.comment }}
         GRAPHWAKE_VERSION: ${{ inputs.version }}
         GITHUB_TOKEN: ${{ inputs.github-token }}
       run: |
-        # Never fail the workflow: every problem is a warning and the step exits 0.
+        # Every problem is a warning and the step exits 0. Only the agent's exit 1 (a failed check with fail-on set on
+        # a pull request build) fails the workflow.
         set -u
         warn() { echo "::warning::graphwake: $1"; exit 0; }
         # Mask the key in the log even when it does not come from a secret.
@@ -83,4 +94,4 @@ runs:
           fi
         fi
 
-        "$dir/$bin" upload || true
+        set +e; "$dir/$bin" upload; s=$?; [ "$s" -eq 1 ] && exit 1; exit 0

@@ -1,6 +1,7 @@
 // Command graphwake sends a service's OpenAPI spec from a CI pipeline to Graphwake.
 //
-// It never fails a pipeline: the exit code is always 0 and problems are written as one warning line.
+// It never fails a pipeline unless asked to: problems are written as one warning line with exit code 0. The only
+// exit code 1 is a failed --fail-on check on an open pull request build.
 package main
 
 import (
@@ -21,6 +22,5 @@ func main() {
 			os.Exit(0)
 		}
 	}()
-	cli.Main(os.Args[1:], cli.DefaultDeps(version, os.Stdout))
-	os.Exit(0)
+	os.Exit(cli.Main(os.Args[1:], cli.DefaultDeps(version, os.Stdout)))
 }

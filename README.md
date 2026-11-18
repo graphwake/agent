@@ -4,13 +4,16 @@
 it runs in pull request builds and in default-branch builds and works out which one it is on its own:
 
 - **Pull request build:** the spec is stored as a draft and the teams that use the API hear about breaking
-  changes before they ship.
+  changes before they ship. On GitHub and Azure Repos the agent also comments on the pull request with the breaking
+  changes and the affected teams, and can fail the build if you ask it to
+  ([Pull request comments and the optional check](#pull-request-comments-and-the-optional-check)).
 - **Default-branch build (after a merge):** the spec becomes the live spec and the real notifications go out. If
   the commit came from a pull request, that pull request's draft notifications are settled as "merged".
 - **Anything else** (feature branches, tags, unknown CI): nothing is sent.
 
-The agent **never fails your pipeline**. The exit code is always 0. It prints exactly one line: what was sent, why
-nothing was sent, or a warning in your CI's warning format. The ingest key is never printed.
+The agent **never fails your pipeline unless you turn on `--fail-on`**. Without it the exit code is always 0. It
+prints exactly one line: what was sent, why nothing was sent, or a warning in your CI's warning format. The ingest
+key and the CI token are never printed.
 
 The agent sends the spec as is (YAML or JSON); it does not generate it. See [Producing the spec](#producing-the-spec).
 
@@ -18,16 +21,16 @@ The agent sends the spec as is (YAML or JSON); it does not generate it. See [Pro
 
 | Where | How |
 |---|---|
-| GitHub Actions | `uses: graphwake/agent/github-action@v0.1.0` ([snippet](#github-actions)) |
+| GitHub Actions | `uses: graphwake/agent/github-action@v0.2.0` ([snippet](#github-actions)) |
 | GitLab CI | include `gitlab/graphwake.gitlab-ci.yml` ([snippet](#gitlab-ci)) |
 | Azure DevOps | the `GraphwakeUpload` task ([snippet](#azure-devops)) |
-| Jenkins, Bitbucket, anything else | the Docker image `ghcr.io/graphwake/agent:0.1.0` or the binary |
+| Jenkins, Bitbucket, anything else | the Docker image `ghcr.io/graphwake/agent:0.2.0` or the binary |
 
 Binaries for Linux, macOS and Windows (amd64 and arm64) are on the
 [releases page](https://github.com/graphwake/agent/releases), with a `checksums.txt`:
 
 ```sh
-VERSION=0.1.0
+VERSION=0.2.0
 BASE=https://github.com/graphwake/agent/releases/download/v$VERSION
 ARCHIVE=graphwake_${VERSION}_linux_amd64.tar.gz
 curl -fsSLO "$BASE/$ARCHIVE" && curl -fsSLO "$BASE/checksums.txt" &&
@@ -36,8 +39,9 @@ curl -fsSLO "$BASE/$ARCHIVE" && curl -fsSLO "$BASE/checksums.txt" &&
   ./graphwake upload --spec openapi.json || echo "graphwake: agent not run, spec not sent"
 ```
 
-The `|| echo` keeps the step green if the download or the checksum check fails (the agent itself always exits
-0). Every snippet below follows the same pattern: verify `checksums.txt` before running, never fail the build.
+The `|| echo` keeps the step green if the download or the checksum check fails (the agent itself exits 0 unless you
+turn on `--fail-on`). Every snippet below follows the same pattern: verify `checksums.txt` before running, never
+fail the build. To let `--fail-on` fail it, see [Letting the check fail the build](#letting-the-check-fail-the-build).
 
 Each ingest key belongs to one service. For a repository with several services, run the step once per service,
 each with its own spec and key.
@@ -57,6 +61,8 @@ Every setting can be given as a flag or as an environment variable. A flag wins 
 | `--pr-url` | `GRAPHWAKE_PR_URL` | Pull request link. |
 | `--author` | `GRAPHWAKE_AUTHOR` | Pull request author. |
 | `--state` | `GRAPHWAKE_STATE` | `open` (default), `closed` or `merged`. |
+| `--fail-on` | `GRAPHWAKE_FAIL_ON` | Fail an open pull request build on breaking changes: `breaking` (any breaking change) or `affected` (only when a breaking change affects a subscribed team; recommended). Default: never fail. GitHub and Azure Repos only. See [the check](#pull-request-comments-and-the-optional-check). |
+| `--no-comment` | `GRAPHWAKE_COMMENT=false` | Do not comment on the pull request. |
 
 `graphwake version` prints the version.
 
@@ -93,6 +99,102 @@ On a live build the agent:
 The agent also sends the CI platform, the commit SHA and the commit time, so Graphwake can ignore a spec from an
 older commit than the live one.
 
+## Pull request comments and the optional check
+
+On an open pull request build on **GitHub Actions**, or on **Azure Pipelines building an Azure Repos repository**,
+the agent comments on the pull request and, with `--fail-on`, can fail the build. GitLab, Bitbucket, Jenkins and
+other CIs get no comment yet; see [Where it works](#where-it-works).
+
+### The comment
+
+One comment per service (a repository that sends several specs gets one comment for each). It shows:
+
+- the title: `Graphwake · <service> · Impact <score> (<Low|Medium|High>)`;
+- the breaking changes, up to 10 lines of `METHOD /path: what changed`, then "+N more";
+- the affected teams: the teams subscribed to a changed endpoint, up to 10 names, then "+N more";
+- how many changed endpoints have no consumer mapped yet, and how many non-breaking changes there are;
+- the check line, when `--fail-on` is set;
+- a link to the impact in Graphwake.
+
+Every build of the pull request updates the same comment; it is found by a hidden marker, so the agent never adds a
+second one. A pull request that never had a breaking change gets no comment. If an earlier build had breaking
+changes and this one has none, the comment changes to "No breaking changes anymore." (on Azure DevOps the thread is
+also resolved). Closed pull requests and default-branch builds leave the comment as it is.
+
+**Team names.** In private and internal repositories the comment names the affected teams. In public repositories,
+or when the visibility cannot be read, it gives only the count: "Affected teams: 3 (team names are hidden in public
+repositories)". Each service can change this in Graphwake (service settings, "Team names in pull request comments":
+Automatic, Always show or Never show). Alert channel names are never shown. The visibility comes from the event
+payload on GitHub and from the project's visibility on Azure DevOps.
+
+`--no-comment` (or `comment: false` in the GitHub Action and the Azure DevOps task) turns the comment off; the check
+still works.
+
+### The check (`--fail-on`)
+
+| `--fail-on` | The pull request build fails when |
+|---|---|
+| not set (default) | never |
+| `breaking` | the pull request has any breaking change |
+| `affected` | a breaking change affects at least one subscribed team (recommended) |
+
+"Affected team" means the same as on Graphwake's impact page: a team subscribed to an endpoint with a breaking
+change. People who only follow an endpoint do not count. With `affected` and breaking changes that no subscribed
+team uses, the build passes and the comment says "Not failing: no subscribed team is affected."
+
+The check runs only on open pull request builds. Default-branch builds, merges and closed pull requests never fail,
+whatever `--fail-on` says. An unknown value never fails either: the agent prints a warning.
+
+**Accepting a breaking change.** If the change is intended, add the label `graphwake-accept-breaking` to the pull
+request (any letter case) and run the check again: the build passes and the comment says the breaking changes were
+accepted with the label. The agent reads the labels when it runs, not from the event that started the build, so a
+re-run sees a label added later.
+
+- GitHub: with `labeled` and `unlabeled` in the `pull_request` trigger types (as in the
+  [snippet](#github-actions)), adding or removing the label runs the workflow again on its own. Without them,
+  re-run the job by hand.
+- Azure DevOps: adding a label does not start a build. Queue the pull request build again.
+
+### Exit codes
+
+| Exit code | When |
+|---|---|
+| 1 | Only with `--fail-on`, on an open pull request build on GitHub or Azure Repos, when Graphwake's check result is "failed". The comment is written first. |
+| 0 | Everything else: the spec was sent, nothing was sent, any warning. |
+
+These never fail the build, with or without `--fail-on`; each is a warning:
+
+- Graphwake cannot be reached, times out, or rejects the request (invalid key, account closed, invalid spec).
+- The comment cannot be written (missing permission, a pull request from a fork, a platform API error). The check
+  still applies.
+- The labels cannot be read. The check still applies, without the label.
+- The calls to the GitHub or Azure DevOps API take longer than 10 seconds in total. The check still applies.
+
+**Without the CI token.** The agent comments and reads labels with `GITHUB_TOKEN` on GitHub and `SYSTEM_ACCESSTOKEN`
+on Azure DevOps. If the token is missing, the agent writes no comment and warns `no GITHUB_TOKEN: cannot comment on
+the pull request or read its labels` (on Azure: `no SYSTEM_ACCESSTOKEN: ...`). `--fail-on` still applies, but the
+label cannot be seen, so a failed check cannot be accepted. The GitHub Action passes the job token for you; on Azure
+DevOps, map `SYSTEM_ACCESSTOKEN: $(System.AccessToken)` in the step's `env` (task, script or Docker), as the
+[Azure DevOps](#azure-devops) section shows.
+
+### Where it works
+
+| CI | Comment | `--fail-on` |
+|---|---|---|
+| GitHub Actions | yes | yes |
+| Azure Pipelines, Azure Repos repository | yes | yes |
+| Azure Pipelines building a repository not hosted in Azure Repos (GitHub, Bitbucket or another Git host) | no | not applied |
+| GitLab CI, Bitbucket Pipelines, Jenkins, any other CI | not yet | not applied |
+
+Where `--fail-on` is not applied, the agent warns `--fail-on is not supported on this CI yet; not failing` and exits 0.
+
+### Letting the check fail the build
+
+The step has to pass the agent's exit code through. The GitHub Action and the Azure DevOps task do: they fail only
+when the agent exits 1 and stay green on everything else. In your own script steps, remove `|| true` or `|| echo ...`
+after the agent and `continueOnError: true`, and keep the download guarded so that a failed download still does not
+fail the build. The [Azure DevOps](#azure-devops) section has a script step written this way.
+
 ## Platforms
 
 ### GitHub Actions
@@ -100,9 +202,13 @@ older commit than the live one.
 ```yaml
 on:
   pull_request:
-    types: [opened, synchronize, reopened, closed]
+    types: [opened, synchronize, reopened, closed, labeled, unlabeled]
   push:
     branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
 
 jobs:
   api-spec:
@@ -110,26 +216,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # ... build and produce openapi.json (see "Producing the spec")
-      - uses: graphwake/agent/github-action@v0.1.0
+      - uses: graphwake/agent/github-action@v0.2.0
         with:
           spec: openapi.json
           key: ${{ secrets.GRAPHWAKE_KEY }}
+          # fail-on: affected   # optional: fail the pull request on breaking changes that affect a subscribed team
 ```
 
-The `closed` type lets the agent report pull requests closed without merging. The action downloads the pinned
-agent release for the runner's OS and architecture, verifies its SHA-256 against `checksums.txt` and runs it.
-Inputs: `spec`, `key`, `url`, `live-branch`, `version`, `github-token` (defaults to the job token). The branch tip
-check needs only `contents: read`; finding the merged pull request needs `pull-requests: read`. If your workflow
-sets `permissions:`, list both there. To publish from more branches, set `live-branch` and add the same branches
-to the `push` trigger.
+The `closed` type lets the agent report pull requests closed without merging; `labeled` and `unlabeled` run the
+check again when the label `graphwake-accept-breaking` is added or removed. The action downloads the pinned agent
+release for the runner's OS and architecture, verifies its SHA-256 against `checksums.txt` and runs it. It fails
+the step only when the agent exits 1 (a failed check with `fail-on` set).
 
-Pull requests from forks get no secrets; the step then prints a warning and sends nothing.
+Inputs: `spec`, `key`, `url`, `live-branch`, `fail-on` (empty, `breaking` or `affected`; default empty, never
+fails), `comment` (default `true`), `version`, `github-token` (defaults to the job token).
+
+Permissions: the branch tip check needs `contents: read`; the pull request comment, the labels and finding the
+merged pull request need `pull-requests: write` (which includes read). Without `pull-requests: write` the agent
+cannot comment and prints a warning. To publish from more branches, set `live-branch` and add the same branches to
+the `push` trigger.
+
+Pull requests from forks get no secrets; the step then prints a warning and sends nothing. In a private repository
+that sends secrets to fork pull requests, the spec is sent but the job token stays read-only (unless write tokens
+are sent too), so the comment fails with a warning.
 
 ### GitLab CI
 
 ```yaml
 include:
-  - remote: https://raw.githubusercontent.com/graphwake/agent/v0.1.0/gitlab/graphwake.gitlab-ci.yml
+  - remote: https://raw.githubusercontent.com/graphwake/agent/v0.2.0/gitlab/graphwake.gitlab-ci.yml
 
 graphwake:
   extends: .graphwake-upload
@@ -142,6 +257,9 @@ Add `GRAPHWAKE_KEY` as a masked CI/CD variable. The template runs in merge reque
 branch. The image has no git, so the tip-of-branch check is skipped there; the merged merge request is read from
 `CI_COMMIT_MESSAGE`. To run it in your own image instead, download the binary as in [Install](#install).
 
+No merge request comments on GitLab yet, and `--fail-on` is not applied there. The template never fails the
+pipeline.
+
 ### Azure DevOps
 
 With the extension installed:
@@ -153,13 +271,35 @@ steps:
     inputs:
       spec: openapi.json
       key: $(GRAPHWAKE_KEY)
+      # failOn: affected   # optional: fail the pull request on breaking changes that affect a subscribed team
+    env:
+      SYSTEM_ACCESSTOKEN: $(System.AccessToken)
 ```
 
-`GRAPHWAKE_KEY` is a secret pipeline variable. Without the extension, run the binary from a script step:
+`GRAPHWAKE_KEY` is a secret pipeline variable. Inputs: `spec`, `key`, `url`, `liveBranch`, `failOn` (empty,
+`breaking` or `affected`; default empty, never fails), `comment` (default `true`), `agentVersion`. The
+`SYSTEM_ACCESSTOKEN: $(System.AccessToken)` mapping gives the agent the build's own token for the comment and the
+labels; keep it in the step. Without it the task also tries the token Azure hands every task, but the mapping is the
+reliable path. The task fails the step only when the agent exits 1 (a failed check with `failOn` set).
+
+**Permission for the comment.** The build's identity needs to write to pull requests:
+
+1. Project settings > Repositories > select the repository (or "All Repositories") > Security.
+2. Select the user `<Project> Build Service (<Organization>)`.
+3. Set "Contribute to pull requests" to Allow.
+
+If the pipeline runs with the organization-wide job scope, the identity is `Project Collection Build Service
+(<Organization>)`: give it the same permission. Without it the agent prints `could not comment on the pull request
+(HTTP 403)` and the build goes on; `failOn` still applies.
+
+Comments and `failOn` work for Azure Repos repositories only. Azure Pipelines building a repository not hosted in
+Azure Repos (GitHub, Bitbucket or another Git host) gets no comment and `failOn` is not applied.
+
+Without the extension, run the binary from a script step:
 
 ```yaml
   - bash: |
-      VERSION=0.1.0
+      VERSION=0.2.0
       BASE=https://github.com/graphwake/agent/releases/download/v$VERSION
       ARCHIVE=graphwake_${VERSION}_linux_amd64.tar.gz
       curl -fsSLO "$BASE/$ARCHIVE" && curl -fsSLO "$BASE/checksums.txt" &&
@@ -170,11 +310,42 @@ steps:
     continueOnError: true
     env:
       GRAPHWAKE_KEY: $(GRAPHWAKE_KEY)
+      SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+```
+
+Azure gives the build's token to scripts only when it is mapped: the `SYSTEM_ACCESSTOKEN: $(System.AccessToken)`
+line lets the agent comment and read the labels. The same goes for the Docker image: map the variable in `env` and
+pass it with `-e SYSTEM_ACCESSTOKEN`.
+
+To let `--fail-on` fail the build, run the agent outside the `|| echo` and drop `continueOnError`; a failed download
+still keeps the step green:
+
+```yaml
+  - bash: |
+      VERSION=0.2.0
+      BASE=https://github.com/graphwake/agent/releases/download/v$VERSION
+      ARCHIVE=graphwake_${VERSION}_linux_amd64.tar.gz
+      if curl -fsSLO "$BASE/$ARCHIVE" && curl -fsSLO "$BASE/checksums.txt" &&
+        sha256sum --check --ignore-missing checksums.txt &&
+        tar -xzf "$ARCHIVE" graphwake; then
+        ./graphwake upload --spec openapi.json --fail-on affected
+      else
+        echo "graphwake: agent not run, spec not sent"
+      fi
+    displayName: Upload spec to Graphwake
+    env:
+      GRAPHWAKE_KEY: $(GRAPHWAKE_KEY)
+      SYSTEM_ACCESSTOKEN: $(System.AccessToken)
 ```
 
 Azure has no default-branch variable: the live branches are `main` and `master` unless `liveBranch` /
 `GRAPHWAKE_LIVE_BRANCH` says otherwise. Pull requests closed without merging are not reported by Azure; their
 drafts close on their own after 14 days.
+
+The task is referenced as `GraphwakeUpload@0`, so every `0.x` update of the task reaches every pipeline that uses it.
+While the extension is private, changes ship within `0.x` (0.2.0 turned the pull request comment on). Once the
+extension is public, a change in default behaviour gets a new major version (`GraphwakeUpload@1`) and `@0` keeps
+its behaviour.
 
 ### Jenkins
 
@@ -182,7 +353,7 @@ drafts close on their own after 14 days.
 stage('API spec') {
   steps {
     withCredentials([string(credentialsId: 'graphwake-key', variable: 'GRAPHWAKE_KEY')]) {
-      sh 'docker run --rm -e GRAPHWAKE_KEY -e BRANCH_NAME -e CHANGE_ID -e CHANGE_URL -e CHANGE_AUTHOR -e GIT_COMMIT -e JENKINS_URL -v "$PWD:/w" -w /w ghcr.io/graphwake/agent:0.1.0 upload --spec openapi.json || true'
+      sh 'docker run --rm -e GRAPHWAKE_KEY -e BRANCH_NAME -e CHANGE_ID -e CHANGE_URL -e CHANGE_AUTHOR -e GIT_COMMIT -e JENKINS_URL -v "$PWD:/w" -w /w ghcr.io/graphwake/agent:0.2.0 upload --spec openapi.json || true'
     }
   }
 }
@@ -192,6 +363,8 @@ Multibranch pipelines give `CHANGE_ID` on pull request builds and `BRANCH_NAME` 
 binary with the checksum-verified script from [Install](#install) in an `sh` step (then git is available for the
 tip check and the merge message). Pin the image by digest (`ghcr.io/graphwake/agent@sha256:...`) if you want the
 same guarantee as the checksum.
+
+No pull request comments on Jenkins yet, and `--fail-on` is not applied there.
 
 ### Bitbucket Pipelines
 
@@ -203,7 +376,7 @@ definitions:
         script:
           - ./build-openapi.sh   # produce openapi.json
           - >-
-            VERSION=0.1.0; BASE=https://github.com/graphwake/agent/releases/download/v$VERSION;
+            VERSION=0.2.0; BASE=https://github.com/graphwake/agent/releases/download/v$VERSION;
             ARCHIVE=graphwake_${VERSION}_linux_amd64.tar.gz;
             (curl -fsSLO "$BASE/$ARCHIVE" && curl -fsSLO "$BASE/checksums.txt" &&
             sha256sum --check --ignore-missing checksums.txt && tar -xzf "$ARCHIVE" graphwake &&
@@ -217,7 +390,8 @@ pipelines:
       - step: *graphwake
 ```
 
-Add `GRAPHWAKE_KEY` as a secured repository variable.
+Add `GRAPHWAKE_KEY` as a secured repository variable. No pull request comments on Bitbucket yet, and `--fail-on` is
+not applied there.
 
 ### Any other CI
 
@@ -241,9 +415,14 @@ graphwake upload --spec openapi.json --live || true                             
 | warning `spec too large (limit 10 MB)` | The request body would be over 10 MB. |
 | warning `spec rejected: ...` | The spec is not valid OpenAPI, or the service no longer exists. |
 | warning `Graphwake unavailable, spec not sent` | Network error or 503 after 3 attempts. |
+| warning `spec sent (pull request #42); check failed: breaking changes affect 3 subscribed teams` | `--fail-on` is set and the check failed: exit code 1. |
+| `graphwake: spec sent (pull request #42); breaking changes accepted with the label graphwake-accept-breaking` | The label lets the build pass. |
+| warning `...; could not comment on the pull request (HTTP 403)` | The comment was not written (permission, fork). Added to the line; the check still applies. |
+| warning `...; no GITHUB_TOKEN: cannot comment on the pull request or read its labels` | The token is not passed to the agent: no comment, and the label cannot be read (`--fail-on` still applies). |
+| warning `...; --fail-on is not supported on this CI yet; not failing` | No comment and no check on this CI (see [Where it works](#where-it-works)). |
 
 Warnings use `::warning::` on GitHub, `##vso[task.logissue type=warning]` on Azure DevOps and a `WARNING` prefix
-elsewhere.
+elsewhere. The check result and any comment or label warning go on the same line as the result.
 
 Reading the spec from a URL retries refused connections and 5xx answers for up to about a minute (5 attempts,
 30 s per request), so the step can run right after the application starts.
@@ -298,7 +477,7 @@ graphwake upload --spec http://localhost:5000/swagger/v1/swagger.json
 
 ```sh
 go vet ./... && go test ./...
-node --test azure-devops/GraphwakeUpload/   # the Azure task's download (Node 20+)
+node --test azure-devops/GraphwakeUpload/index.test.js   # the Azure task (Node 20+)
 go build -o graphwake ./cmd/graphwake
 ```
 

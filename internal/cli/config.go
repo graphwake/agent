@@ -20,6 +20,10 @@ type Config struct {
 	State             string
 	Live              bool
 	LiveBranch        string
+	// FailOn is "breaking", "affected" or empty (no gate); the server validates it.
+	FailOn string
+	// NoComment turns the pull request comment off.
+	NoComment bool
 }
 
 // lookup reads GRAPHWAKE_<suffix>, falling back to the deprecated DOCSYNC_<suffix>.
@@ -38,8 +42,17 @@ func truthy(s string) bool {
 	return false
 }
 
+func falsy(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "0", "false", "no", "off":
+		return true
+	}
+	return false
+}
+
 const uploadUsage = `usage: graphwake upload --spec <file|http(s)-url> [--pr <id>] [--pr-url <url>] [--author <name>]
                         [--state open|closed|merged] [--live] [--live-branch <branches>] [--url <api-url>]
+                        [--fail-on breaking|affected] [--no-comment]
 The ingest key is read from GRAPHWAKE_KEY (--key is accepted but not recommended).
 Every flag has a GRAPHWAKE_* environment variable (GRAPHWAKE_SPEC, GRAPHWAKE_PR, GRAPHWAKE_LIVE_BRANCH, ...).`
 
@@ -59,6 +72,8 @@ func parseUpload(args []string, getenv func(string) string) (Config, error) {
 	fs.StringVar(&c.State, "state", "", "")
 	fs.BoolVar(&c.Live, "live", false, "")
 	fs.StringVar(&c.LiveBranch, "live-branch", "", "")
+	fs.StringVar(&c.FailOn, "fail-on", "", "")
+	fs.BoolVar(&c.NoComment, "no-comment", false, "")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return c, errHelp
@@ -84,8 +99,12 @@ func parseUpload(args []string, getenv func(string) string) (Config, error) {
 	fill(&c.Author, "AUTHOR")
 	fill(&c.State, "STATE")
 	fill(&c.LiveBranch, "LIVE_BRANCH")
+	fill(&c.FailOn, "FAIL_ON")
 	if !set["live"] {
 		c.Live = truthy(lookup(getenv, "LIVE"))
+	}
+	if !set["no-comment"] {
+		c.NoComment = falsy(lookup(getenv, "COMMENT"))
 	}
 	if c.URL == "" {
 		c.URL = DefaultAPIURL
@@ -93,6 +112,7 @@ func parseUpload(args []string, getenv func(string) string) (Config, error) {
 	c.Key = strings.TrimSpace(c.Key)
 	c.PR = strings.TrimPrefix(strings.TrimSpace(c.PR), "#")
 	c.State = strings.ToLower(strings.TrimSpace(c.State))
+	c.FailOn = strings.ToLower(strings.TrimSpace(c.FailOn))
 	switch c.State {
 	case "", "open", "closed", "merged":
 	default:

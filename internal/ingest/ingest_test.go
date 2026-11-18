@@ -215,3 +215,99 @@ func TestSendRespectsAttemptTimeoutAndDeadline(t *testing.T) {
 		t.Fatalf("took %v with %d calls; the caps were not applied", elapsed, calls.Load())
 	}
 }
+
+func TestInterpretDecodesPullRequestOutcome(t *testing.T) {
+	body := `{"outcome":"Changed","changes":[],"pullRequest":{"changeSetId":"6f1c0d2e-0000-4000-8000-000000000001",` +
+		`"impactUrl":"https://app.graphwake.com/impact/6f1c","comment":{"action":"upsert","key":"graphwake:service:42",` +
+		`"body":"## Graphwake\n- breaks **payments**"},"gate":{"result":"failed","message":"This PR breaks 2 teams."}}}`
+	got := Interpret(200, []byte(body))
+	if !got.OK || got.Warning != "" {
+		t.Fatalf("Interpret = %+v", got)
+	}
+	want := PROutcome{
+		ChangeSetID: "6f1c0d2e-0000-4000-8000-000000000001",
+		ImpactURL:   "https://app.graphwake.com/impact/6f1c",
+		Comment:     &Comment{Action: "upsert", Key: "graphwake:service:42", Body: "## Graphwake\n- breaks **payments**"},
+		Gate:        Gate{Result: "failed", Message: "This PR breaks 2 teams."},
+	}
+	if got.PR == nil || got.PR.ChangeSetID != want.ChangeSetID || got.PR.ImpactURL != want.ImpactURL ||
+		got.PR.Comment == nil || *got.PR.Comment != *want.Comment || got.PR.Gate != want.Gate {
+		t.Fatalf("PR = %+v (comment %+v), want %+v", got.PR, got.PR.Comment, want)
+	}
+
+	// No comment (commentFormat was not sent) and a null gate message.
+	noComment := `{"pullRequest":{"changeSetId":"x","impactUrl":"u","comment":null,"gate":{"result":"off","message":null}}}`
+	got = Interpret(200, []byte(noComment))
+	if !got.OK || got.PR == nil || got.PR.Comment != nil || got.PR.Gate != (Gate{Result: "off"}) {
+		t.Fatalf("Interpret(no comment) = %+v PR %+v", got, got.PR)
+	}
+}
+
+func TestInterpretWithoutPullRequestLeavesNil(t *testing.T) {
+	for _, body := range []string{``, `{"outcome":"Changed","changes":[]}`, `not json`, `{"pullRequest":"oops"}`, `{"pullRequest":null}`} {
+		got := Interpret(200, []byte(body))
+		if !got.OK || got.PR != nil {
+			t.Errorf("Interpret(200, %q) = %+v PR %+v, want OK with no PR", body, got, got.PR)
+		}
+	}
+	// Error answers never carry an outcome.
+	if got := Interpret(422, []byte(`{"error":"bad","pullRequest":{"gate":{"result":"failed"}}}`)); got.PR != nil {
+		t.Fatalf("Interpret(422) PR = %+v", got.PR)
+	}
+}
+
+func TestEncodeOmitsEmptyHints(t *testing.T) {
+	ctx := Context{Kind: "pullRequest", PRID: "7", State: "open"}
+	data, err := Encode(Body{Context: ctx})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(data), "pullRequest") != 1 { // only context.kind
+		t.Fatalf("body without hints carries a pullRequest field: %s", data)
+	}
+
+	data, err = Encode(Body{Context: ctx, PullRequest: &PullRequestHints{RepoVisibility: "unknown"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"context":{"kind":"pullRequest","prId":"7","state":"open"},"pullRequest":{"repoVisibility":"unknown","acceptLabel":false}}`
+	if string(data) != want {
+		t.Fatalf("Encode =\n%s\nwant\n%s", data, want)
+	}
+
+	data, _ = Encode(Body{Context: ctx, PullRequest: &PullRequestHints{CommentFormat: "github", RepoVisibility: "private",
+		FailOn: "breaking", AcceptLabel: true}})
+	want = `{"context":{"kind":"pullRequest","prId":"7","state":"open"},"pullRequest":{"commentFormat":"github","repoVisibility":"private","failOn":"breaking","acceptLabel":true}}`
+	if string(data) != want {
+		t.Fatalf("Encode =\n%s\nwant\n%s", data, want)
+	}
+}
+
+// An outcome with a long comment body still decodes: the response cap is above 64 KiB.
+func TestSendReadsLargePullRequestOutcome(t *testing.T) {
+	long := strings.Repeat("x", 200<<10)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"pullRequest":{"changeSetId":"c","impactUrl":"u","comment":{"action":"upsert","key":"k","body":"` +
+			long + `"},"gate":{"result":"passed","message":null}}}`))
+	}))
+	defer srv.Close()
+	res := client(srv.URL).Send(context.Background(), []byte(`{}`))
+	if !res.OK || res.PR == nil || res.PR.Comment == nil || len(res.PR.Comment.Body) != len(long) {
+		t.Fatalf("Send = %+v PR %+v", res, res.PR)
+	}
+}
+
+// A big change set puts more than 512 KiB of changes[] before pullRequest; the outcome at the end still decodes.
+func TestSendReadsPullRequestAfterLargeChanges(t *testing.T) {
+	change := `{"kind":"breaking","path":"/v1/orders/{}","detail":"` + strings.Repeat("y", 1000) + `"}`
+	changes := strings.Repeat(change+",", 700) + change // ~700 KiB
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"changes":[` + changes + `],"pullRequest":{"changeSetId":"c","impactUrl":"u",` +
+			`"comment":{"action":"upsert","key":"k","body":"b"},"gate":{"result":"failed","message":"m"}}}`))
+	}))
+	defer srv.Close()
+	res := client(srv.URL).Send(context.Background(), []byte(`{}`))
+	if !res.OK || res.PR == nil || res.PR.Gate.Result != "failed" {
+		t.Fatalf("Send = %+v PR %+v", res, res.PR)
+	}
+}

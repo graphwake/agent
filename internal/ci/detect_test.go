@@ -36,25 +36,37 @@ func TestDetect(t *testing.T) {
 			env: gh("pull_request", "pr_opened.json", map[string]string{"GITHUB_REF": "refs/pull/42/merge",
 				"GITHUB_HEAD_REF": "feature/orders"}),
 			want: Info{CommitBranch: "feature/orders", Platform: GitHub, Event: EventPullRequest, PRID: "42", PRURL: "https://github.com/acme/orders/pull/42",
-				Author: "octocat", CommitSHA: head, DefaultBranch: "main"},
+				Author: "octocat", CommitSHA: head, DefaultBranch: "main", RepoVisibility: "private"},
 		},
 		{
 			name: "github pull_request_target counts as a pull request",
 			env:  gh("pull_request_target", "pr_opened.json", nil),
 			want: Info{Platform: GitHub, Event: EventPullRequest, PRID: "42", PRURL: "https://github.com/acme/orders/pull/42",
-				Author: "octocat", CommitSHA: head, DefaultBranch: "main"},
+				Author: "octocat", CommitSHA: head, DefaultBranch: "main", RepoVisibility: "private"},
+		},
+		{
+			name: "github public repository",
+			env:  gh("pull_request", "pr_opened_public.json", nil),
+			want: Info{Platform: GitHub, Event: EventPullRequest, PRID: "42", PRURL: "https://github.com/acme/orders/pull/42",
+				Author: "octocat", CommitSHA: head, DefaultBranch: "main", RepoVisibility: "public"},
+		},
+		{
+			name: "github internal repository: visibility wins over private",
+			env:  gh("pull_request", "pr_opened_internal.json", nil),
+			want: Info{Platform: GitHub, Event: EventPullRequest, PRID: "42", PRURL: "https://github.com/acme/orders/pull/42",
+				Author: "octocat", CommitSHA: head, DefaultBranch: "main", RepoVisibility: "internal"},
 		},
 		{
 			name: "github pull request closed without merge",
 			env:  gh("pull_request", "pr_closed.json", nil),
 			want: Info{Platform: GitHub, Event: EventPRClosed, PRID: "42", PRURL: "https://github.com/acme/orders/pull/42",
-				Author: "octocat", CommitSHA: head, DefaultBranch: "main"},
+				Author: "octocat", CommitSHA: head, DefaultBranch: "main", RepoVisibility: "public"},
 		},
 		{
 			name: "github pull request merged",
 			env:  gh("pull_request", "pr_merged.json", nil),
 			want: Info{Platform: GitHub, Event: EventPRMerged, PRID: "42", PRURL: "https://github.com/acme/orders/pull/42",
-				Author: "octocat", CommitSHA: head, DefaultBranch: "main"},
+				Author: "octocat", CommitSHA: head, DefaultBranch: "main", RepoVisibility: "private"},
 		},
 		{
 			name: "github pull request without a readable payload",
@@ -65,7 +77,7 @@ func TestDetect(t *testing.T) {
 		{
 			name: "github push",
 			env:  gh("push", "push.json", map[string]string{"GITHUB_REF": "refs/heads/trunk"}),
-			want: Info{CommitBranch: "trunk", Platform: GitHub, Event: EventBranch, Branch: "trunk", DefaultBranch: "trunk",
+			want: Info{CommitBranch: "trunk", Platform: GitHub, Event: EventBranch, Branch: "trunk", DefaultBranch: "trunk", RepoVisibility: "public",
 				CommitSHA:     "ffffffffffffffffffffffffffffffffffffffff",
 				CommitMessage: "Merge pull request #42 from acme/feature\n\nAdd orders endpoint",
 				CommitTime:    "2026-10-30T10:00:00+03:00"},
@@ -135,14 +147,25 @@ func TestDetect(t *testing.T) {
 				"BUILD_REQUESTEDFOR": "Jane Doe", "BUILD_SOURCEVERSION": "merge", "SYSTEM_PULLREQUEST_SOURCECOMMITID": "head",
 				"SYSTEM_PULLREQUEST_SOURCEBRANCH": "refs/heads/feature/orders", "BUILD_SOURCEBRANCH": "refs/pull/15/merge"},
 			want: Info{CommitBranch: "feature/orders", Platform: Azure, Event: EventPullRequest, PRID: "15", PRURL: "https://dev.azure.com/acme/shop/_git/orders/pullrequest/15",
-				Author: "Jane Doe", CommitSHA: "head"},
+				Author: "Jane Doe", CommitSHA: "head", AzureRepoProvider: "TfsGit"},
+		},
+		{
+			name: "azure repos pull request with the repository identifiers and the build token",
+			env: map[string]string{"TF_BUILD": "True", "BUILD_REASON": "PullRequest", "SYSTEM_PULLREQUEST_PULLREQUESTID": "15",
+				"BUILD_REPOSITORY_PROVIDER": "TfsGit", "BUILD_REPOSITORY_URI": "https://dev.azure.com/acme/shop/_git/orders",
+				"SYSTEM_COLLECTIONURI": "https://dev.azure.com/acme/", "SYSTEM_TEAMPROJECT": "shop",
+				"BUILD_REPOSITORY_ID": "7d1f2c3a-0000-4000-8000-000000000001", "SYSTEM_ACCESSTOKEN": "azure_build_token"},
+			want: Info{Platform: Azure, Event: EventPullRequest, PRID: "15", PRURL: "https://dev.azure.com/acme/shop/_git/orders/pullrequest/15",
+				AzureCollectionURI: "https://dev.azure.com/acme/", AzureProject: "shop",
+				AzureRepoID: "7d1f2c3a-0000-4000-8000-000000000001", AzureRepoProvider: "TfsGit", Token: "azure_build_token"},
 		},
 		{
 			name: "azure github-hosted pull request uses the GitHub number",
 			env: map[string]string{"TF_BUILD": "True", "BUILD_REASON": "PullRequest", "SYSTEM_PULLREQUEST_PULLREQUESTID": "998877",
 				"SYSTEM_PULLREQUEST_PULLREQUESTNUMBER": "42", "BUILD_REPOSITORY_PROVIDER": "GitHub",
 				"BUILD_REPOSITORY_URI": "https://github.com/acme/orders.git"},
-			want: Info{Platform: Azure, Event: EventPullRequest, PRID: "42", PRURL: "https://github.com/acme/orders/pull/42"},
+			want: Info{Platform: Azure, Event: EventPullRequest, PRID: "42", PRURL: "https://github.com/acme/orders/pull/42",
+				AzureRepoProvider: "GitHub"},
 		},
 		{
 			name: "azure main build",
@@ -194,7 +217,10 @@ func TestDetect(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := Detect(envOf(tt.env), os.ReadFile)
 			got.prURLBase = ""
-			got.Repo, got.APIURL, got.Token = "", "", ""
+			if got.Platform == GitHub {
+				// GitHub API fields are covered by TestDetectGitHubAPIFields.
+				got.Repo, got.APIURL, got.Token = "", "", ""
+			}
 			if got != tt.want {
 				t.Errorf("Detect() =\n %+v\nwant\n %+v", got, tt.want)
 			}

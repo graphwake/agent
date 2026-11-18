@@ -31,10 +31,23 @@ type Context struct {
 	Branch string `json:"branch,omitempty"`
 }
 
+// PullRequestHints is the optional "pullRequest" object of the ingest request: what the server needs to write the
+// pull request comment and the gate decision. It is sent only on a pull request build.
+type PullRequestHints struct {
+	// CommentFormat is "github" or "azure-devops", sent only when the agent can write the comment.
+	CommentFormat string `json:"commentFormat,omitempty"`
+	// RepoVisibility is "private", "internal", "public" or "unknown".
+	RepoVisibility string `json:"repoVisibility,omitempty"`
+	// FailOn is "breaking" or "affected"; the server validates it.
+	FailOn      string `json:"failOn,omitempty"`
+	AcceptLabel bool   `json:"acceptLabel"`
+}
+
 // Body is the ingest request. Spec is nil when a pull request is closed (no spec needed).
 type Body struct {
-	Spec    *string `json:"spec,omitempty"`
-	Context Context `json:"context"`
+	Spec        *string           `json:"spec,omitempty"`
+	Context     Context           `json:"context"`
+	PullRequest *PullRequestHints `json:"pullRequest,omitempty"`
 }
 
 // ErrBodyTooLarge: the encoded body is over MaxBodyBytes.
@@ -55,11 +68,36 @@ func Encode(b Body) ([]byte, error) {
 	return data, nil
 }
 
+// Comment is the pull request comment the server wrote: "upsert" creates or updates it, "resolve" only updates an
+// existing one. Key identifies the comment ("graphwake:service:<id>").
+type Comment struct {
+	Action string `json:"action"`
+	Key    string `json:"key"`
+	Body   string `json:"body"`
+}
+
+// Gate is the pipeline decision: Result is "off", "passed", "failed", "accepted" or "invalid"; Message is the short
+// sentence to print (empty when the server sent null).
+type Gate struct {
+	Result  string `json:"result"`
+	Message string `json:"message"`
+}
+
+// PROutcome is the "pullRequest" object of a successful ingest answer. Comment is nil when no comment format was sent.
+type PROutcome struct {
+	ChangeSetID string   `json:"changeSetId"`
+	ImpactURL   string   `json:"impactUrl"`
+	Comment     *Comment `json:"comment"`
+	Gate        Gate     `json:"gate"`
+}
+
 // Result is the outcome of a send: OK, or the warning to print.
 type Result struct {
 	OK      bool
 	Status  int // 0 when no answer was received
 	Warning string
+	// PR is the pull request outcome of a successful answer; nil when the server sent none or it could not be read.
+	PR *PROutcome
 }
 
 // Client posts to the ingest endpoint with a few retries for network errors and 503.
@@ -122,8 +160,16 @@ func (c *Client) post(ctx context.Context, endpoint string, body []byte) (int, [
 		return 0, nil, err
 	}
 	defer resp.Body.Close()
-	data, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	return resp.StatusCode, data, nil
+}
+
+// maxResponseBytes caps how much of an answer is read. The answer lists every change before the pull request
+// outcome, so a big change set must not cut the outcome off.
+const maxResponseBytes = 16 << 20
+
+type okBody struct {
+	PullRequest *PROutcome `json:"pullRequest"`
 }
 
 type errorBody struct {
@@ -139,6 +185,10 @@ func Interpret(status int, body []byte) Result {
 	switch {
 	case status >= 200 && status <= 299:
 		r.OK = true
+		var ok okBody
+		if json.Unmarshal(body, &ok) == nil {
+			r.PR = ok.PullRequest // an unreadable outcome is treated like none
+		}
 	case status == http.StatusUnauthorized:
 		r.Warning = "invalid or missing ingest key, spec not sent"
 	case status == http.StatusPaymentRequired:
