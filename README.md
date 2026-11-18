@@ -1,6 +1,7 @@
 # Graphwake CI agent
 
-`graphwake` sends your service's OpenAPI spec from your CI pipeline to Graphwake. Add one step to the pipeline;
+`graphwake` sends your service's OpenAPI spec (or AsyncAPI document, see [AsyncAPI documents](#asyncapi-documents-kafka-azure-service-bus))
+from your CI pipeline to Graphwake. Add one step to the pipeline;
 it runs in pull request builds and in default-branch builds and works out which one it is on its own:
 
 - **Pull request build:** the spec is stored as a draft and the teams that use the API hear about breaking
@@ -67,6 +68,21 @@ Every setting can be given as a flag or as an environment variable. A flag wins 
 | `--no-comment` | `GRAPHWAKE_COMMENT=false` | Do not comment on the pull request. |
 
 `graphwake version` prints the version.
+
+## AsyncAPI documents (Kafka, Azure Service Bus)
+
+A service added in Graphwake with the contract **AsyncAPI** (Pro and Enterprise plans) takes an AsyncAPI 2.6 or 3.x
+document (YAML or JSON) instead of an OpenAPI spec. The command, the flags and every CI snippet below stay the same; only
+the file changes:
+
+```sh
+graphwake upload --spec asyncapi.yaml
+```
+
+The document must be one file: references to other files or URLs are rejected, so bundle it first (for example
+`asyncapi bundle`). An OpenAPI spec sent to an AsyncAPI service, or the other way round, is rejected
+(`spec rejected: This service expects an AsyncAPI document.`). If the workspace's plan does not include event contracts,
+the upload is refused with HTTP 403 and the agent prints the warning `unexpected response 403, spec not sent` (exit 0).
 
 ## How the build is classified
 
@@ -415,7 +431,8 @@ graphwake upload --spec openapi.json --live || true                             
 | warning `invalid or missing ingest key` | 401: check `GRAPHWAKE_KEY` (keys stop working when rotated). |
 | warning `this service takes its spec from a URL, not from CI` | The service is set up to poll a URL. |
 | warning `spec too large (limit 10 MB)` | The request body would be over 10 MB. |
-| warning `spec rejected: ...` | The spec is not valid OpenAPI, or the service no longer exists. |
+| warning `spec rejected: ...` | The spec is not valid OpenAPI (or AsyncAPI 2.6 / 3.x for an AsyncAPI service), or the service no longer exists. |
+| warning `unexpected response 403, spec not sent` | For an AsyncAPI service: the workspace's plan does not include event contracts (Pro and Enterprise). |
 | warning `Graphwake unavailable, spec not sent` | Network error or 503 after 3 attempts. |
 | warning `spec sent (pull request #42); check failed: breaking changes affect 3 subscribed teams` | `--fail-on` is set and the check failed: exit code 1. |
 | `graphwake: spec sent (pull request #42); breaking changes accepted with the label graphwake-accept-breaking` | The label lets the build pass. |
