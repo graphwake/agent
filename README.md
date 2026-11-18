@@ -17,6 +17,8 @@ key and the CI token are never printed.
 
 The agent sends the spec as is (YAML or JSON); it does not generate it. See [Producing the spec](#producing-the-spec).
 
+Try the check in your browser first: https://graphwake.com/tools/openapi-diff
+
 ## Install
 
 | Where | How |
