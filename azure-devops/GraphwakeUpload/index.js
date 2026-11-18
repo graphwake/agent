@@ -1,5 +1,6 @@
 // Azure DevOps task: download the graphwake agent for this agent's OS/arch, verify its checksum and run
-// `graphwake upload`. Node built-ins only. It never fails the pipeline: problems are warnings, exit code 0.
+// `graphwake upload`. Node built-ins only. It fails the pipeline only when the agent exits 1 (a failed check with
+// failOn set on a pull request build); every other problem is a warning and the task exits 0.
 "use strict";
 
 const crypto = require("crypto");
@@ -78,18 +79,37 @@ function download(url, file, redirects = 5) {
   });
 }
 
+// exitCodeFor turns the agent's exit status into the task's: 1 (a failed check) fails the task, anything else
+// (0, a crash, a timeout, no status) does not.
+function exitCodeFor(status) {
+  return status === 1 ? 1 : 0;
+}
+
+// accessToken returns the build's own token for the pull request comment and labels: SYSTEM_ACCESSTOKEN when the
+// pipeline maps it, else the token Azure hands every task in ENDPOINT_AUTH_SYSTEMVSSCONNECTION; "" if neither.
+function accessToken(env) {
+  if (env.SYSTEM_ACCESSTOKEN) return env.SYSTEM_ACCESSTOKEN;
+  try {
+    const token = JSON.parse(env.ENDPOINT_AUTH_SYSTEMVSSCONNECTION || "").parameters.AccessToken;
+    return typeof token === "string" ? token : "";
+  } catch (e) {
+    return "";
+  }
+}
+
 function sha256(file) {
   return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }
 
+// main returns the task's exit code.
 async function main() {
   const goos = { linux: "linux", darwin: "darwin", win32: "windows" }[process.platform];
   const goarch = { x64: "amd64", arm64: "arm64" }[process.arch];
   if (!goos || !goarch) {
     warn("unsupported agent platform " + process.platform + "/" + process.arch + ", spec not sent");
-    return;
+    return 0;
   }
-  const version = (input("agentVersion") || "0.1.0").replace(/^v/, "");
+  const version = (input("agentVersion") || "0.2.0").replace(/^v/, "");
   const ext = goos === "windows" ? "zip" : "tar.gz";
   const bin = goos === "windows" ? "graphwake.exe" : "graphwake";
   const archive = `graphwake_${version}_${goos}_${goarch}.${ext}`;
@@ -104,7 +124,7 @@ async function main() {
       await download(`${base}/checksums.txt`, path.join(dir, "checksums.txt"));
     } catch (e) {
       warn("could not download the agent " + version + " (" + e.message + "), spec not sent");
-      return;
+      return 0;
     }
     const expected = fs
       .readFileSync(path.join(dir, "checksums.txt"), "utf8")
@@ -113,13 +133,13 @@ async function main() {
       .find((parts) => parts[1] === archive);
     if (!expected || expected[0] !== sha256(path.join(dir, archive))) {
       warn("agent checksum mismatch, spec not sent");
-      return;
+      return 0;
     }
     // tar reads zip archives too (bsdtar ships with Windows 10+).
     const unpack = spawnSync("tar", ["-xf", path.join(dir, archive), "-C", dir, bin], { stdio: "ignore", timeout: 60000 });
     if (unpack.status !== 0 || !fs.existsSync(binPath)) {
       warn("could not unpack the agent, spec not sent");
-      return;
+      return 0;
     }
   }
 
@@ -128,14 +148,18 @@ async function main() {
     GRAPHWAKE_KEY: input("key"),
     GRAPHWAKE_URL: input("url"),
     GRAPHWAKE_LIVE_BRANCH: input("liveBranch"),
+    GRAPHWAKE_FAIL_ON: input("failOn"),
+    GRAPHWAKE_COMMENT: input("comment") || "true",
+    SYSTEM_ACCESSTOKEN: accessToken(process.env),
   });
   delete env.INPUT_KEY;
   // spawnSync blocks the event loop, so the overall timer cannot fire meanwhile: the child gets its own cap.
   const run = spawnSync(binPath, ["upload"], { stdio: "inherit", env, timeout: AGENT_TIMEOUT_MS });
   if (run.error) warn("the agent did not finish (" + run.error.message + "), spec may not have been sent");
+  return exitCodeFor(run.status);
 }
 
-// Never fail the pipeline: whatever happens, warn and exit 0.
+// Anything that goes wrong in the task itself is a warning and exits 0.
 function bail(message) {
   warn(message + ", spec not sent");
   process.exit(0);
@@ -146,8 +170,11 @@ if (require.main === module) {
   process.on("unhandledRejection", (e) => bail("unexpected error (" + (e && e.message) + ")"));
   setTimeout(() => bail("the task took longer than " + OVERALL_TIMEOUT_MS / 1000 + " s"), OVERALL_TIMEOUT_MS);
   main()
-    .catch((e) => warn("unexpected error (" + (e && e.message) + "), spec not sent"))
-    .finally(() => process.exit(0));
+    .then((code) => process.exit(code))
+    .catch((e) => {
+      warn("unexpected error (" + (e && e.message) + "), spec not sent");
+      process.exit(0);
+    });
 }
 
-module.exports = { download };
+module.exports = { accessToken, download, exitCodeFor };

@@ -3,11 +3,11 @@
   "id": "1a59f93e-44c0-4688-86d0-47a3af7fe6a6",
   "name": "GraphwakeUpload",
   "friendlyName": "Graphwake spec upload",
-  "description": "Send your service's OpenAPI spec to Graphwake from pull request and default-branch builds. Never fails the pipeline.",
+  "description": "Send your service's OpenAPI spec to Graphwake from pull request and default-branch builds, and comment on the pull request with the breaking changes and the affected teams. Never fails the pipeline unless you set failOn.",
   "helpMarkDown": "Downloads the graphwake agent (checksum verified) and runs `graphwake upload`. See https://github.com/graphwake/agent.",
   "category": "Utility",
   "author": "Graphwake",
-  "version": { "Major": 0, "Minor": 1, "Patch": 0 },
+  "version": { "Major": 0, "Minor": 2, "Patch": 0 },
   "instanceNameFormat": "Upload spec to Graphwake",
   "minimumAgentVersion": "3.232.1",
   "inputs": [
@@ -42,11 +42,32 @@
       "helpMarkDown": "Branches whose builds publish the live spec, comma-separated, globs allowed (e.g. main,release/*). Default: main or master."
     },
     {
+      "name": "failOn",
+      "type": "pickList",
+      "label": "Fail the pull request build on",
+      "required": false,
+      "defaultValue": "",
+      "options": {
+        "": "Never (default)",
+        "breaking": "Any breaking change",
+        "affected": "Breaking changes that affect a subscribed team"
+      },
+      "helpMarkDown": "Fail an open pull request build when it has breaking changes. The label graphwake-accept-breaking on the pull request lets it pass. Azure Repos only."
+    },
+    {
+      "name": "comment",
+      "type": "boolean",
+      "label": "Comment on the pull request",
+      "required": false,
+      "defaultValue": "true",
+      "helpMarkDown": "Write the breaking changes and the affected teams to a pull request thread. Azure Repos only; the project's Build Service needs \"Contribute to pull requests\" on the repository."
+    },
+    {
       "name": "agentVersion",
       "type": "string",
       "label": "Agent version",
       "required": false,
-      "defaultValue": "0.1.0",
+      "defaultValue": "0.2.0",
       "helpMarkDown": "Release of github.com/graphwake/agent to download."
     }
   ],
