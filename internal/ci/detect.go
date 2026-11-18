@@ -57,7 +57,18 @@ type Info struct {
 	CommitMessage string
 
 	// GitHub only: used for the tip-of-branch check and the merged-PR lookup.
-	Repo, APIURL, Token string
+	Repo, APIURL string
+	// Token is the platform's API token: GITHUB_TOKEN on GitHub, SYSTEM_ACCESSTOKEN on Azure Pipelines ("" when
+	// not given). The CLI hides it from all output.
+	Token string
+
+	// RepoVisibility is the repository's visibility when the platform says it: "private", "internal" or "public"
+	// (GitHub event payload). "" when unknown; Azure Repos visibility is looked up through the API instead.
+	RepoVisibility string
+
+	// Azure Pipelines only: the organisation URL (SYSTEM_COLLECTIONURI), project (SYSTEM_TEAMPROJECT), repository
+	// id (BUILD_REPOSITORY_ID) and provider (BUILD_REPOSITORY_PROVIDER, "TfsGit" for Azure Repos).
+	AzureCollectionURI, AzureProject, AzureRepoID, AzureRepoProvider string
 
 	// Problem explains why a build that looks like a pull request could not be read ("" when fine).
 	Problem string
@@ -179,8 +190,10 @@ type githubEvent struct {
 			SHA string `json:"sha"`
 		} `json:"head"`
 	} `json:"pull_request"`
-	Repository struct {
+	Repository *struct {
 		DefaultBranch string `json:"default_branch"`
+		Private       bool   `json:"private"`
+		Visibility    string `json:"visibility"`
 	} `json:"repository"`
 	HeadCommit *struct {
 		Message   string `json:"message"`
@@ -215,8 +228,9 @@ func detectGitHub(getenv Getenv, readFile ReadFile) Info {
 			evOK = true
 		}
 	}
-	if evOK {
+	if evOK && ev.Repository != nil {
 		info.DefaultBranch = ev.Repository.DefaultBranch
+		info.RepoVisibility = repoVisibility(ev.Repository.Visibility, ev.Repository.Private)
 	}
 
 	name := getenv("GITHUB_EVENT_NAME")
@@ -272,6 +286,19 @@ func detectGitHub(getenv Getenv, readFile ReadFile) Info {
 	return info
 }
 
+// repoVisibility reads a GitHub repository's visibility: the visibility field when the payload has it (older
+// GitHub Enterprise Server payloads may not), else the private flag.
+func repoVisibility(visibility string, private bool) string {
+	switch v := strings.ToLower(visibility); v {
+	case "private", "internal", "public":
+		return v
+	}
+	if private {
+		return "private"
+	}
+	return "public"
+}
+
 func detectGitLab(getenv Getenv) Info {
 	project := strings.TrimSuffix(getenv("CI_PROJECT_URL"), "/")
 	info := Info{
@@ -307,9 +334,15 @@ func detectAzure(getenv Getenv) Info {
 		Platform:      Azure,
 		CommitSHA:     getenv("BUILD_SOURCEVERSION"),
 		CommitMessage: getenv("BUILD_SOURCEVERSIONMESSAGE"),
+		// SYSTEM_ACCESSTOKEN is only set when the pipeline maps it (env: SYSTEM_ACCESSTOKEN: $(System.AccessToken)).
+		Token:              getenv("SYSTEM_ACCESSTOKEN"),
+		AzureCollectionURI: getenv("SYSTEM_COLLECTIONURI"),
+		AzureProject:       getenv("SYSTEM_TEAMPROJECT"),
+		AzureRepoID:        getenv("BUILD_REPOSITORY_ID"),
+		AzureRepoProvider:  getenv("BUILD_REPOSITORY_PROVIDER"),
 	}
 	repoURI := strings.TrimSuffix(getenv("BUILD_REPOSITORY_URI"), "/")
-	switch provider := getenv("BUILD_REPOSITORY_PROVIDER"); {
+	switch provider := info.AzureRepoProvider; {
 	case repoURI == "":
 	case provider == "TfsGit":
 		info.prURLBase = repoURI + "/pullrequest/"
