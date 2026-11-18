@@ -296,3 +296,18 @@ func TestSendReadsLargePullRequestOutcome(t *testing.T) {
 		t.Fatalf("Send = %+v PR %+v", res, res.PR)
 	}
 }
+
+// A big change set puts more than 512 KiB of changes[] before pullRequest; the outcome at the end still decodes.
+func TestSendReadsPullRequestAfterLargeChanges(t *testing.T) {
+	change := `{"kind":"breaking","path":"/v1/orders/{}","detail":"` + strings.Repeat("y", 1000) + `"}`
+	changes := strings.Repeat(change+",", 700) + change // ~700 KiB
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"changes":[` + changes + `],"pullRequest":{"changeSetId":"c","impactUrl":"u",` +
+			`"comment":{"action":"upsert","key":"k","body":"b"},"gate":{"result":"failed","message":"m"}}}`))
+	}))
+	defer srv.Close()
+	res := client(srv.URL).Send(context.Background(), []byte(`{}`))
+	if !res.OK || res.PR == nil || res.PR.Gate.Result != "failed" {
+		t.Fatalf("Send = %+v PR %+v", res, res.PR)
+	}
+}

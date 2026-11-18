@@ -195,3 +195,43 @@ func TestForbiddenIsErrorWithoutToken(t *testing.T) {
 		}
 	}
 }
+
+// A full page of long bot comments is over 1 MiB; our comment at the end of it is still found.
+func TestFindOnPageOverOneMiB(t *testing.T) {
+	api := newAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		comments := make([]map[string]any, 100)
+		for i := range comments {
+			comments[i] = map[string]any{"id": i + 1, "body": "<!-- other-bot -->\n" + strings.Repeat("z", 15<<10)}
+		}
+		comments[99] = map[string]any{"id": 100, "body": "<!-- graphwake:service:mine -->\nhi"}
+		_ = json.NewEncoder(w).Encode(comments)
+	})
+	id, found, err := api.FindComment(context.Background(), "42", Marker("graphwake:service:mine"))
+	if err != nil || !found || id != 100 {
+		t.Fatalf("FindComment = %d, %v, %v; want 100, true, nil", id, found, err)
+	}
+}
+
+// Only a comment that starts with the marker is ours; one that quotes it further down is ignored.
+func TestFindRequiresMarkerAtStart(t *testing.T) {
+	api := newAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `[
+			{"id":11,"body":"> quoting the bot:\n> <!-- graphwake:service:mine -->\nwhy?"},
+			{"id":12,"body":"  \n<!-- graphwake:service:mine -->\nMy service"}
+		]`)
+	})
+	id, found, err := api.FindComment(context.Background(), "42", Marker("graphwake:service:mine"))
+	if err != nil || !found || id != 12 {
+		t.Fatalf("FindComment = %d, %v, %v; want 12, true, nil", id, found, err)
+	}
+}
+
+func TestFindIgnoresQuotedMarkerOnly(t *testing.T) {
+	api := newAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `[{"id":11,"body":"see <!-- graphwake:service:mine --> above"}]`)
+	})
+	_, found, err := api.FindComment(context.Background(), "42", Marker("graphwake:service:mine"))
+	if err != nil || found {
+		t.Fatalf("FindComment found=%v err=%v; want not found", found, err)
+	}
+}

@@ -164,8 +164,9 @@ func (c *Client) post(ctx context.Context, endpoint string, body []byte) (int, [
 	return resp.StatusCode, data, nil
 }
 
-// maxResponseBytes caps how much of an answer is read; a pull request comment body can be long.
-const maxResponseBytes = 512 << 10
+// maxResponseBytes caps how much of an answer is read. The answer lists every change before the pull request
+// outcome, so a big change set must not cut the outcome off.
+const maxResponseBytes = 16 << 20
 
 type okBody struct {
 	PullRequest *PROutcome `json:"pullRequest"`

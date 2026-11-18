@@ -12,7 +12,7 @@ import (
 )
 
 type recorded struct {
-	Method, Path, Query, Auth, Body string
+	Method, Path, Query, Auth, Body, FedAuth string
 }
 
 // server answers each "METHOD escaped-path" with the given status and body, and records every request.
@@ -26,7 +26,7 @@ func server(t *testing.T, routes map[string]struct {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		mu.Lock()
-		reqs = append(reqs, recorded{r.Method, r.URL.EscapedPath(), r.URL.RawQuery, r.Header.Get("Authorization"), string(b)})
+		reqs = append(reqs, recorded{r.Method, r.URL.EscapedPath(), r.URL.RawQuery, r.Header.Get("Authorization"), string(b), r.Header.Get("X-TFS-FedAuthRedirect")})
 		mu.Unlock()
 		route, ok := routes[r.Method+" "+r.URL.EscapedPath()]
 		if !ok {
@@ -257,6 +257,78 @@ func TestUnauthorizedIsErrorWithoutToken(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "401") || strings.Contains(err.Error(), "secret-token") {
 			t.Errorf("call %d: error %q", i+1, err)
+		}
+	}
+}
+
+// The marker fallback only matches a first comment that starts with the marker; a quote of it is ignored.
+func TestFindThreadFallbackRequiresMarkerAtStart(t *testing.T) {
+	srv, _ := server(t, map[string]route{
+		"GET " + repoPath + "/threads": {200, `{"count":2,"value":[
+			{"id":50,"status":"active","comments":[{"id":1,"parentCommentId":0,"content":"Why does <!-- graphwake:service:svc-1 --> show up?"}]},
+			{"id":51,"status":"active","comments":[{"id":6,"parentCommentId":0,"content":"\n  <!-- graphwake:service:svc-1 -->\n## Graphwake"}]}
+		]}`},
+	})
+	tid, cid, found, err := api(srv, "/").FindThread(context.Background(), "7", key)
+	if err != nil || !found || tid != 51 || cid != 6 {
+		t.Fatalf("FindThread = %d, %d, %v, %v; want 51, 6, true", tid, cid, found, err)
+	}
+}
+
+func TestFindThreadIgnoresQuotedMarkerOnly(t *testing.T) {
+	srv, _ := server(t, map[string]route{
+		"GET " + repoPath + "/threads": {200, `{"count":1,"value":[
+			{"id":52,"status":"active","comments":[{"id":1,"parentCommentId":0,"content":"> <!-- graphwake:service:svc-1 -->"}]}
+		]}`},
+	})
+	_, _, found, err := api(srv, "/").FindThread(context.Background(), "7", key)
+	if err != nil || found {
+		t.Fatalf("FindThread found=%v err=%v; want not found", found, err)
+	}
+}
+
+// Every call asks Azure DevOps not to redirect to a sign-in page.
+func TestEveryRequestSuppressesSignInRedirect(t *testing.T) {
+	srv, reqs := server(t, map[string]route{
+		"GET /org/_apis/projects/My%20Project":        {200, `{"visibility":"private"}`},
+		"GET " + repoPath + "/labels":                 {200, `{"value":[]}`},
+		"GET " + repoPath + "/threads":                {200, `{"value":[]}`},
+		"POST " + repoPath + "/threads":               {200, `{}`},
+		"PATCH " + repoPath + "/threads/1/comments/1": {200, `{}`},
+		"PATCH " + repoPath + "/threads/1":            {200, `{}`},
+	})
+	a := api(srv, "/")
+	ctx := context.Background()
+	_, _ = a.Visibility(ctx)
+	_, _ = a.Labels(ctx, "7")
+	_, _, _, _ = a.FindThread(ctx, "7", key)
+	_ = a.CreateThread(ctx, "7", key, "b")
+	_ = a.UpdateThread(ctx, "7", 1, 1, "b", "active")
+	if len(*reqs) != 6 {
+		t.Fatalf("requests = %d, want 6", len(*reqs))
+	}
+	for _, r := range *reqs {
+		if r.FedAuth != "Suppress" {
+			t.Errorf("%s %s: X-TFS-FedAuthRedirect = %q, want Suppress", r.Method, r.Path, r.FedAuth)
+		}
+	}
+}
+
+// A 203 is Azure DevOps' sign-in page, not a success.
+func TestNonAuthoritative203IsError(t *testing.T) {
+	srv, _ := server(t, map[string]route{
+		"GET /org/_apis/projects/My%20Project": {203, `<html>sign in</html>`},
+		"GET " + repoPath + "/threads":         {203, `<html>sign in</html>`},
+		"POST " + repoPath + "/threads":        {203, `<html>sign in</html>`},
+	})
+	a := api(srv, "/")
+	ctx := context.Background()
+	_, err1 := a.Visibility(ctx)
+	_, _, _, err2 := a.FindThread(ctx, "7", key)
+	err3 := a.CreateThread(ctx, "7", key, "b")
+	for i, err := range []error{err1, err2, err3} {
+		if err == nil || err.Error() != "Azure DevOps API answered 203" {
+			t.Errorf("call %d: error %v, want \"Azure DevOps API answered 203\"", i+1, err)
 		}
 	}
 }

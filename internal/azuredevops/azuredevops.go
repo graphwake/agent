@@ -57,6 +57,8 @@ func (a API) do(ctx context.Context, method, u string, payload any) ([]byte, err
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Authorization", "Bearer "+a.Token)
+	// Without this header a rejected token gets a 203 sign-in page instead of a 401.
+	req.Header.Set("X-TFS-FedAuthRedirect", "Suppress")
 	resp, err := a.HTTP.Do(req)
 	if err != nil {
 		return nil, err
@@ -66,7 +68,8 @@ func (a API) do(ctx context.Context, method, u string, payload any) ([]byte, err
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+	// 203 is the sign-in page Azure DevOps serves for a token it does not accept: never a success.
+	if resp.StatusCode < 200 || resp.StatusCode > 299 || resp.StatusCode == http.StatusNonAuthoritativeInfo {
 		return nil, fmt.Errorf("Azure DevOps API answered %d", resp.StatusCode)
 	}
 	return out, nil
@@ -118,8 +121,9 @@ func (a API) Labels(ctx context.Context, pr string) ([]string, error) {
 }
 
 // FindThread returns the pull request thread that carries key (and the id of its first comment). A thread
-// matches on its Graphwake.Key property; failing that, on its first comment containing the "<!-- key -->"
-// marker the comment body starts with. Deleted threads and comments are ignored.
+// matches on its Graphwake.Key property; failing that, on its first comment starting with the "<!-- key -->"
+// marker (leading whitespace aside), so a comment that quotes the marker is never taken for ours. Deleted
+// threads and comments are ignored.
 func (a API) FindThread(ctx context.Context, pr, key string) (threadID, commentID int, found bool, err error) {
 	body, err := a.do(ctx, http.MethodGet, a.pullRequest(pr)+"/threads", nil)
 	if err != nil {
@@ -152,7 +156,7 @@ func (a API) FindThread(ctx context.Context, pr, key string) (threadID, commentI
 		if v, ok := t.Properties[keyProperty].Value.(string); ok && v == key {
 			return t.ID, first.ID, true, nil
 		}
-		if fallbackThread == 0 && strings.Contains(first.Content, marker) {
+		if fallbackThread == 0 && strings.HasPrefix(strings.TrimLeft(first.Content, " \t\r\n"), marker) {
 			fallbackThread, fallbackComment = t.ID, first.ID
 		}
 	}

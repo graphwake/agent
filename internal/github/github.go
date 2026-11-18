@@ -40,7 +40,10 @@ func (a API) send(ctx context.Context, method, path string, body any) ([]byte, i
 	return a.do(ctx, method, path, "application/vnd.github+json", body)
 }
 
-// do makes one authenticated call and reads up to 1 MiB of the answer. Errors never carry the token.
+// maxResponseBytes caps how much of an answer is read: a page of 100 long bot comments can pass 1 MiB.
+const maxResponseBytes = 8 << 20
+
+// do makes one authenticated call and reads up to maxResponseBytes of the answer. Errors never carry the token.
 func (a API) do(ctx context.Context, method, path, accept string, payload any) ([]byte, int, error) {
 	var reqBody io.Reader
 	if payload != nil {
@@ -65,7 +68,7 @@ func (a API) do(ctx context.Context, method, path, accept string, payload any) (
 		return nil, 0, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
 		return nil, resp.StatusCode, err
 	}
@@ -148,8 +151,8 @@ const (
 	maxCommentPages = 10
 )
 
-// FindComment returns the id of the first pull request comment whose body contains marker. It reads at most
-// maxCommentPages pages of comments.
+// FindComment returns the id of the first pull request comment whose body starts with marker (leading whitespace
+// aside), so a comment that quotes the marker is never taken for ours. It reads at most maxCommentPages pages.
 func (a API) FindComment(ctx context.Context, pr, marker string) (int64, bool, error) {
 	for page := 1; page <= maxCommentPages; page++ {
 		path := fmt.Sprintf("/repos/%s/issues/%s/comments?per_page=%d&page=%d", a.Repo, url.PathEscape(pr), commentsPerPage, page)
@@ -165,7 +168,7 @@ func (a API) FindComment(ctx context.Context, pr, marker string) (int64, bool, e
 			return 0, false, err
 		}
 		for _, c := range comments {
-			if strings.Contains(c.Body, marker) {
+			if strings.HasPrefix(strings.TrimLeft(c.Body, " \t\r\n"), marker) {
 				return c.ID, true, nil
 			}
 		}
