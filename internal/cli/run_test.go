@@ -1008,16 +1008,53 @@ func TestGitLabFailOnNotSupported(t *testing.T) {
 	}
 }
 
-// Without GITHUB_TOKEN the labels cannot be read, so --fail-on is not applied (no failing without the escape hatch).
-func TestGitHubWithoutTokenFailOnNotSupported(t *testing.T) {
+// Without the CI token the comment cannot be written and the labels cannot be read, but the CI is supported: the
+// check still applies (spec 6.1), with no accept label, and the line says why there is no comment.
+func TestGitHubWithoutTokenStillAppliesFailOn(t *testing.T) {
 	b := newBackend(t)
-	out := b.run(t, run{env: githubEnv("pull_request", privatePR(t), map[string]string{"GITHUB_TOKEN": "<unset>"}),
+	b.body = prOutcome("", "", "failed", failedAffect)
+	out, code := b.exec(t, run{env: githubEnv("pull_request", privatePR(t), map[string]string{"GITHUB_TOKEN": "<unset>"}),
 		args: []string{"--fail-on", "affected"}})
-	if out != "::warning::graphwake: spec sent (pull request #42); --fail-on is not supported on this CI yet; not failing" {
+	want := "::warning::graphwake: spec sent (pull request #42); " + failedAffect +
+		"; no GITHUB_TOKEN: cannot comment on the pull request or read its labels"
+	if code != 1 || out != want {
+		t.Fatalf("exit %d, out = %q", code, out)
+	}
+	h := hintsOf(t, b.sent()[0])
+	if _, has := h["commentFormat"]; has || h["failOn"] != "affected" || h["acceptLabel"] != false || h["repoVisibility"] != "private" {
+		t.Fatalf("hints %v", h)
+	}
+	if b.ghCalls != 0 {
+		t.Fatalf("gh calls %d", b.ghCalls)
+	}
+}
+
+func TestAzureWithoutTokenStillAppliesFailOn(t *testing.T) {
+	b := newBackend(t)
+	b.body = prOutcome("", "", "failed", failedAffect)
+	out, code := b.exec(t, run{env: azureEnv(map[string]string{"SYSTEM_ACCESSTOKEN": "<unset>"}), args: []string{"--fail-on", "affected"}})
+	want := "##vso[task.logissue type=warning]graphwake: spec sent (pull request #42); " + failedAffect +
+		"; no SYSTEM_ACCESSTOKEN: cannot comment on the pull request or read its labels"
+	if code != 1 || out != want {
+		t.Fatalf("exit %d, out = %q", code, out)
+	}
+	h := hintsOf(t, b.sent()[0])
+	if _, has := h["commentFormat"]; has || h["failOn"] != "affected" || h["acceptLabel"] != false || h["repoVisibility"] != "unknown" {
+		t.Fatalf("hints %v", h)
+	}
+	if b.adoCalls != 0 {
+		t.Fatalf("azure calls %d", b.adoCalls)
+	}
+
+	// Without --fail-on the missing comment is still explained; with --no-comment as well, nothing is said.
+	b.body = prOutcome("", "", "off", "")
+	out = b.run(t, run{env: azureEnv(map[string]string{"SYSTEM_ACCESSTOKEN": "<unset>"})})
+	if out != "##vso[task.logissue type=warning]graphwake: spec sent (pull request #42); no SYSTEM_ACCESSTOKEN: cannot comment on the pull request or read its labels" {
 		t.Fatalf("out = %q", out)
 	}
-	if _, has := b.sent()[0]["pullRequest"]; has || b.ghCalls != 0 {
-		t.Fatalf("hints %v, gh calls %d", b.sent()[0], b.ghCalls)
+	out = b.run(t, run{env: azureEnv(map[string]string{"SYSTEM_ACCESSTOKEN": "<unset>"}), args: []string{"--no-comment"}})
+	if out != "graphwake: spec sent (pull request #42)" {
+		t.Fatalf("out = %q", out)
 	}
 }
 

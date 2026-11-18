@@ -25,6 +25,7 @@ const (
 	defaultPlatformDeadline = 10 * time.Second
 
 	failOnUnsupported = "--fail-on is not supported on this CI yet; not failing"
+	noAPIAccess       = ": cannot comment on the pull request or read its labels"
 	noCheckResult     = "the server did not return a check result; not failing"
 )
 
@@ -34,6 +35,9 @@ const (
 type prStep struct {
 	// platform is formatGitHub or formatAzure on a supported platform, "" otherwise (then no hints are sent).
 	platform string
+	// api: the platform API can be called (the CI token is there). Without it the check still applies, with no
+	// comment and no accept label.
+	api bool
 	// comment: the comment is written (format sent); failOn: the value sent ("" when no check was asked for).
 	comment bool
 	failOn  string
@@ -56,17 +60,16 @@ func newPRStep(cfg Config, info ci.Info, p plan, gh github.API, d Deps) *prStep 
 	if s.budget.left <= 0 {
 		s.budget.left = defaultPlatformDeadline
 	}
+	tokenName := ""
 	switch info.Platform {
 	case ci.GitHub:
-		if gh.Usable() {
-			s.platform = formatGitHub
-		}
+		s.platform, s.api, tokenName = formatGitHub, gh.Usable(), "GITHUB_TOKEN"
 	case ci.Azure:
 		// Azure Pipelines can build GitHub or Bitbucket repositories; the thread and label APIs are Azure Repos only.
-		s.ado = azuredevops.API{CollectionURI: info.AzureCollectionURI, Project: info.AzureProject,
-			RepoID: info.AzureRepoID, Token: info.Token, HTTP: d.HTTP}
-		if info.AzureRepoProvider == "TfsGit" && s.ado.Usable() {
-			s.platform = formatAzure
+		if info.AzureRepoProvider == "TfsGit" {
+			s.ado = azuredevops.API{CollectionURI: info.AzureCollectionURI, Project: info.AzureProject,
+				RepoID: info.AzureRepoID, Token: info.Token, HTTP: d.HTTP}
+			s.platform, s.api, tokenName = formatAzure, s.ado.Usable(), "SYSTEM_ACCESSTOKEN"
 		}
 	}
 	if s.platform == "" {
@@ -75,8 +78,11 @@ func newPRStep(cfg Config, info ci.Info, p plan, gh github.API, d Deps) *prStep 
 		}
 		return s
 	}
-	s.comment = !cfg.NoComment
 	s.failOn = cfg.FailOn
+	s.comment = !cfg.NoComment && s.api
+	if !s.api && (!cfg.NoComment || cfg.FailOn != "") {
+		s.warn("no " + tokenName + noAPIAccess)
+	}
 	return s
 }
 
@@ -88,14 +94,14 @@ func (s *prStep) hints(ctx context.Context) *ingest.PullRequestHints {
 	if s == nil || s.platform == "" {
 		return nil
 	}
-	h := &ingest.PullRequestHints{RepoVisibility: "unknown", FailOn: s.failOn}
+	h := &ingest.PullRequestHints{FailOn: s.failOn}
 	ctx, done := s.budget.start(ctx)
 	defer done()
 	if s.comment {
 		h.CommentFormat = s.platform
-		h.RepoVisibility = knownVisibility(s.visibility(ctx))
 	}
-	if s.failOn != "" {
+	h.RepoVisibility = knownVisibility(s.visibility(ctx))
+	if s.failOn != "" && s.api {
 		// Read at run time, not from the event payload: a re-run carries the old payload without a newer label.
 		labels, err := s.labels(ctx)
 		if err != nil {
@@ -108,9 +114,14 @@ func (s *prStep) hints(ctx context.Context) *ingest.PullRequestHints {
 	return h
 }
 
+// visibility is the repository's visibility: GitHub's from the event payload; Azure's from the API, asked only
+// when the comment (the one place it is used) is written. "" when unknown.
 func (s *prStep) visibility(ctx context.Context) string {
 	if s.platform == formatGitHub {
 		return s.info.RepoVisibility
+	}
+	if !s.comment {
+		return ""
 	}
 	v, _ := s.ado.Visibility(ctx) // unknown on failure
 	return v
