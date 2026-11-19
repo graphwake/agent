@@ -69,7 +69,6 @@ func parseUsage(args []string, getenv func(string) string) (usageConfig, error) 
 	fill(&c.Key, "KEY")
 	fill(&c.Service, "SERVICE")
 	fill(&c.CallerField, "CALLER_FIELD")
-	c.Source = strings.ToLower(c.Source)
 	if !set["no-counts"] {
 		c.NoCounts = truthy(getenv("GRAPHWAKE_USAGE_NO_COUNTS"))
 	}
@@ -116,7 +115,7 @@ func usageStart(args []string, d Deps) (r *report.Reporter, cfg usageConfig, pla
 }
 
 // presetName tells a preset name from something else pasted into --source (such as a key): only such a name is
-// repeated in a warning.
+// repeated in a warning, exactly as given (so a registered secret is still masked).
 var presetName = regexp.MustCompile(`^[a-z0-9-]{1,20}$`)
 
 // findPreset returns the preset cfg.Source names; ok is false when there is none (problem says why).
@@ -125,7 +124,7 @@ func findPreset(source string) (p usage.Preset, problem string, ok bool) {
 	if source == "" {
 		return p, "no source given (one of: " + names + ")", false
 	}
-	if p, ok = usage.PresetByName(source); ok {
+	if p, ok = usage.PresetByName(strings.ToLower(source)); ok {
 		return p, "", true
 	}
 	if presetName.MatchString(source) {

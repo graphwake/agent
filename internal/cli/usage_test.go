@@ -233,6 +233,10 @@ func TestUsage_every_failure_exits_zero(t *testing.T) {
 		{name: "unreachable", env: map[string]string{"GRAPHWAKE_URL": closed.URL},
 			want: "usage not sent: Graphwake could not be reached"},
 		{name: "nothing matched", templates: `{"services":[]}`, want: "usage not sent: nothing in the input matched an endpoint"},
+		{name: "all withheld", input: "caller,service,method,path,lastSeen\njane@contoso.com,orders,GET,/v1/orders/1,2026-11-18\n",
+			want: "usage not sent: no caller name could be sent: every name looked personal (an e-mail address, an IP address or a token) or was missing. Check --caller-field"},
+		{name: "too many rows", templates: strings.Replace(usageTemplates, `"maxRows":50000`, `"maxRows":1`, 1),
+			want: "usage not sent: the summary is too large"},
 		{name: "all anonymous", input: "caller,service,method,path,lastSeen\n,orders,GET,/v1/orders/1,2026-11-18\n",
 			want: "usage not sent: no caller names were found in the input. Check --caller-field"},
 	}

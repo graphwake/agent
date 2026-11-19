@@ -26,7 +26,7 @@ type Client struct {
 	Key       string
 	UserAgent string
 	HTTP      *http.Client
-	// Sleep waits between attempts; it returns early with ctx's error when ctx ends. nil waits on a timer.
+	// Sleep waits between attempts (required); it returns early with ctx's error when ctx ends.
 	Sleep func(context.Context, time.Duration) error
 }
 
@@ -88,10 +88,6 @@ func Plural(n int64, one, many string) string {
 // call sends one request with the upload's retry policy and maps a failure to its warning. answer is the body of a
 // 2xx answer.
 func (c *Client) call(ctx context.Context, method, path string, body []byte) (Result, []byte) {
-	sleep := c.Sleep
-	if sleep == nil {
-		sleep = wait
-	}
 	t := ingest.Client{
 		BaseURL:        c.BaseURL,
 		Key:            c.Key,
@@ -99,7 +95,7 @@ func (c *Client) call(ctx context.Context, method, path string, body []byte) (Re
 		HTTP:           c.HTTP,
 		Attempts:       attempts,
 		Backoff:        backoff,
-		Sleep:          func(ctx context.Context, d time.Duration) { _ = sleep(ctx, d) },
+		Sleep:          func(ctx context.Context, d time.Duration) { _ = c.Sleep(ctx, d) },
 		Deadline:       callDeadline,
 		AttemptTimeout: attemptTimeout,
 	}
@@ -138,16 +134,4 @@ func interpret(status int) Result {
 		r.Warning = fmt.Sprintf("usage not sent: unexpected response %d", status)
 	}
 	return r
-}
-
-// wait is the Sleep of a Client that has none.
-func wait(ctx context.Context, d time.Duration) error {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-t.C:
-		return nil
-	}
 }
