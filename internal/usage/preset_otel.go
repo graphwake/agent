@@ -10,7 +10,9 @@ import (
 )
 
 // otelQuery is the OpenTelemetry Collector configuration that writes HTTP client spans to a file for the otel preset.
-const otelQuery = `processors:
+const otelQuery = `# OpenTelemetry Collector (contrib distribution, 0.146.0 or later: the filter processor's
+# trace_conditions): write HTTP client spans to a file, then send the file.
+processors:
   filter/http_client:
     error_mode: ignore
     trace_conditions:

@@ -143,7 +143,9 @@ curl -s -w '\n' -X POST "https://api.${DD_SITE:-datadoghq.com}/api/v2/spans/anal
 | extend Path = strcat("/", trim_start(@"/", tostring(u.Path))), Host = tostring(u.Host)
 | summarize Calls = count(), LastSeen = max(TimeGenerated) by ApimSubscriptionId, ApiId, Method, Host, Path
 `
-	otel := `processors:
+	otel := `# OpenTelemetry Collector (contrib distribution, 0.146.0 or later: the filter processor's
+# trace_conditions): write HTTP client spans to a file, then send the file.
+processors:
   filter/http_client:
     error_mode: ignore
     trace_conditions:
@@ -167,8 +169,8 @@ plugins:
       path: /var/log/kong/usage.log
 `
 	nginx := `# NGINX: add this log format (http context), then send the file.
-# "caller" is the value that identifies the client: a header you set at the edge,
-# $remote_user for Basic auth, or $ssl_client_s_dn for mutual TLS.
+# "caller" is the value that identifies the client application: a header you set at the
+# edge, or $ssl_client_s_dn for mutual TLS.
 log_format graphwake_usage escape=json
   '{"time":"$time_iso8601","method":"$request_method",'
   '"host":"$host","path":"$uri","caller":"$http_x_client_id"}';

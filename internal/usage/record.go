@@ -107,8 +107,8 @@ type Row struct {
 	LastSeen   string `json:"lastSeen"`        // day
 }
 
-// PrefixCount is one line of the local, never-sent table of unmatched requests: the host and the first two path
-// segments of the raw path, with the number of requests.
+// PrefixCount is one line of the never-sent table of unmatched requests that --dry-run prints: the host and the first
+// two path segments of the raw path, masked (see pathPrefix), with the number of requests.
 type PrefixCount struct {
 	Host   string
 	Prefix string

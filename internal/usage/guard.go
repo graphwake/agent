@@ -15,15 +15,23 @@ var (
 	hexRun       = regexp.MustCompile(`[0-9A-Fa-f]{32,}`)
 )
 
-// LooksPersonal reports whether a caller name may identify a person or a secret rather than an application: it holds
-// an e-mail address, an IPv4 or IPv6 literal, a run of 32 or more hexadecimal characters (also behind a label, as in
-// "apikey=<hex>"), or a secret-like run of 32 or more characters of [A-Za-z0-9+/_=-] (not a canonical UUID; pure
-// hexadecimal, or mixing upper case, lower case and digits). Such names are never sent; their requests are only
-// counted as withheld. A name with a control character (newline, carriage return, tab, ESC, ...) or "##" is withheld
-// too: no real client or service name has one, and such a name could break a log line or start a CI logging command
-// ("##vso[") wherever it is printed. A name that looks like a path or a URL is withheld as well (see looksLikePath): a
-// caller field pointed at a request path must not send that path or its query string. So is a name that looks like
-// structured content (see looksStructured): a caller field pointed at a body or a query string must not send it.
+// LooksPersonal reports whether a caller name matches one of the withholding rules. Such a name is never sent; its
+// requests are only counted as withheld. The rules, each stated with examples in the README ("What the usage step
+// sends") and mirrored rule for rule by the server's guard, withhold a name that:
+//   - contains an e-mail address;
+//   - contains an IPv4 or IPv6 literal (see hasIPLiteral);
+//   - contains a run of 32 or more hexadecimal characters, also behind a label ("token-<hex>");
+//   - contains a secret-like run of 32 or more characters of [A-Za-z0-9+/_=-] that is not exactly a canonical UUID
+//     and is pure hexadecimal or mixes upper case, lower case and digits (see looksRandom);
+//   - contains a control character (newline, carriage return, tab, ESC, ...) or "##": no real client or service name
+//     has one, and such a name could break a log line or start a CI logging command ("##vso[") wherever it is
+//     printed;
+//   - looks like a path or a URL (see looksLikePath): a caller field pointed at a request path must not send that
+//     path or its query string;
+//   - looks like structured content (see looksStructured): a caller field pointed at a body or a query string must
+//     not send it.
+//
+// The rules are a safety net for common shapes of personal or secret values, not a guarantee.
 func LooksPersonal(name string) bool {
 	if strings.Contains(name, "##") || strings.IndexFunc(name, unicode.IsControl) >= 0 {
 		return true

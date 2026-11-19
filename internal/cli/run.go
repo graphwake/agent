@@ -90,12 +90,7 @@ func Main(args []string, d Deps) int {
 	case "upload":
 		return upload(args[1:], d)
 	case "usage":
-		switch {
-		case len(args) > 1 && args[1] == "query":
-			return usageQuery(args[2:], d)
-		default:
-			return usageSend(args[1:], d)
-		}
+		return usageCommand(args[1:], d)
 	case "help", "-h", "--help":
 		io.WriteString(d.Out, helpText+"\n")
 	default:

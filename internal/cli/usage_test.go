@@ -236,7 +236,7 @@ func TestUsage_every_failure_exits_zero(t *testing.T) {
 			want: "usage not sent: Graphwake could not be reached"},
 		{name: "nothing matched", templates: `{"services":[]}`, want: "usage not sent: nothing in the input matched an endpoint"},
 		{name: "all withheld", input: "caller,service,method,path,lastSeen\njane@contoso.com,orders,GET,/v1/orders/1,2026-11-18\n",
-			want: "usage not sent: no caller name could be sent: every name was withheld (it looked like an e-mail address, an IP address, a secret, a path or a URL) or was missing. Check --caller-field"},
+			want: "usage not sent: no caller name could be sent: every name was withheld (it matched a withholding rule: see the README) or was missing. Check --caller-field"},
 		{name: "too many rows", templates: strings.Replace(usageTemplates, `"maxRows":50000`, `"maxRows":1`, 1),
 			want: "usage not sent: the summary is too large"},
 		{name: "all anonymous", input: "caller,service,method,path,lastSeen\n,orders,GET,/v1/orders/1,2026-11-18\n",
@@ -694,5 +694,24 @@ func TestUsage_dry_run_table_is_safe_for_the_job_log(t *testing.T) {
 	if !strings.Contains(out, "\n    - ::error::x /reset-password/*  1\n") || !strings.Contains(out, "\n    - and 12 more\n") ||
 		strings.Count(out, "\n    - ") != 21 {
 		t.Fatalf("out =\n%s", out)
+	}
+}
+
+// panicReader stands for a bug: reading it panics.
+type panicReader struct{}
+
+func (panicReader) Read([]byte) (int, error) { panic("bug with " + usageKey) }
+
+// A bug in a usage command never fails the pipeline or prints what panicked: one fixed warning, exit code 0.
+func TestUsage_internal_error_is_one_warning_and_exit_zero(t *testing.T) {
+	b := newBackend(t)
+	for _, args := range [][]string{{"--source", "generic"}, {"--source", "generic", "--dry-run"}} {
+		out, code := b.main(t, "usage", run{args: args, stdin: panicReader{}}, nil)
+		if code != 0 || out != "WARNING graphwake: usage not sent: internal error\n" {
+			t.Fatalf("%v: code %d, out %q", args, code, out)
+		}
+	}
+	if len(b.usagePosts) != 0 {
+		t.Fatalf("%d posts", len(b.usagePosts))
 	}
 }

@@ -4,8 +4,8 @@ import "io"
 
 // nginxQuery is the NGINX log format that writes the access log the nginx preset reads.
 const nginxQuery = `# NGINX: add this log format (http context), then send the file.
-# "caller" is the value that identifies the client: a header you set at the edge,
-# $remote_user for Basic auth, or $ssl_client_s_dn for mutual TLS.
+# "caller" is the value that identifies the client application: a header you set at the
+# edge, or $ssl_client_s_dn for mutual TLS.
 log_format graphwake_usage escape=json
   '{"time":"$time_iso8601","method":"$request_method",'
   '"host":"$host","path":"$uri","caller":"$http_x_client_id"}';

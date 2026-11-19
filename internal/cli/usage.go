@@ -26,7 +26,8 @@ endpoint, how often and when last. Other than the one value you choose as the ca
 is sent. A caller name that matches one of the withholding rules listed in the README is withheld; the rules are a
 safety net, not a guarantee, so choose a caller field that holds a client or application name.
 Presets: apim, appinsights, datadog, generic, kong, nginx, otel. "graphwake usage query" prints the query or configuration that produces the input.
---dry-run prints the summary that would be sent and what stays on this machine, and sends nothing.
+--dry-run prints the summary that would be sent and what is not sent; it sends no summary, it only fetches the
+endpoint list with the usage key. In CI always pass --input.
 The usage key is read from GRAPHWAKE_USAGE_KEY (--key is accepted but not recommended).
 Environment variables (a flag wins over its variable): GRAPHWAKE_USAGE_SOURCE, GRAPHWAKE_USAGE_INPUT,
 GRAPHWAKE_USAGE_KEY, GRAPHWAKE_URL (for --url), GRAPHWAKE_USAGE_SERVICE, GRAPHWAKE_USAGE_CALLER_FIELD,
@@ -154,11 +155,26 @@ func usageQuery(args []string, d Deps) int {
 	return 0
 }
 
+// usageCommand runs "graphwake usage" or "graphwake usage query". A bug (a panic) ends it with one fixed warning and
+// exit code 0, like every other outcome; what panicked is never printed.
+func usageCommand(args []string, d Deps) (code int) {
+	defer func() {
+		if recover() != nil {
+			io.WriteString(d.Out, "WARNING graphwake: usage not sent: internal error\n")
+			code = 0
+		}
+	}()
+	if len(args) > 0 && args[0] == "query" {
+		return usageQuery(args[1:], d)
+	}
+	return usageSend(args, d)
+}
+
 // usageSend reads the input, matches it to the endpoint templates and sends the summary, or with --dry-run prints
 // it. Whatever happens it prints one line (the dry run: the summary) and returns 0.
 //
-// The dry run cannot send by construction: building the summary sees Graphwake only through templateSource, and
-// the client that can send is created in the send branch alone. cfg.DryRun is read here and nowhere else.
+// The dry run sends no summary: buildSummary sees Graphwake only through templateSource, which can fetch the
+// templates and nothing else, and Send is called in the send branch alone. cfg.DryRun is read here and nowhere else.
 func usageSend(args []string, d Deps) int {
 	r, cfg, platform, ok := usageStart(args, d)
 	if !ok {
@@ -208,7 +224,7 @@ type templateSource interface {
 	Templates(ctx context.Context) (usage.Templates, usage.Result)
 }
 
-// summary is a built and encoded usage summary with what stays on this machine.
+// summary is a built and encoded usage summary with what is not sent (the dry run prints the unmatched table).
 type summary struct {
 	snap      usage.Snapshot
 	body      []byte // the encoded snap, exactly as it is sent
@@ -365,8 +381,8 @@ func emptySummary(snap usage.Snapshot, requests int64) string {
 	case snap.AnonymousRequests == requests:
 		return "no caller names were found in the input. Check --caller-field"
 	case snap.UnmatchedRequests == 0:
-		return "no caller name could be sent: every name was withheld (it looked like an e-mail address, an IP address, " +
-			"a secret, a path or a URL) or was missing. Check --caller-field"
+		return "no caller name could be sent: every name was withheld (it matched a withholding rule: see the README) " +
+			"or was missing. Check --caller-field"
 	}
 	return "nothing in the input matched an endpoint"
 }

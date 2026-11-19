@@ -515,12 +515,17 @@ the key `upload` uses, is a different key. A run:
 1. fetches the endpoint list of the key's usage source: `GET /api/ingest/usage/templates` returns the services,
    their server URLs and endpoint templates, the mappings set in Graphwake and the limits;
 2. reads the input with the preset and matches every request to an endpoint template, on this machine;
-3. sends the summary: `POST /api/ingest/usage`. With `--dry-run` it prints the summary instead and sends nothing.
+3. sends the summary: `POST /api/ingest/usage`. With `--dry-run` it prints the summary instead: it sends no
+   summary; it only fetches the endpoint list with the usage key (step 1).
 
 A request finds its endpoint in this order: a mapping set in Graphwake (host, path prefix, API name; the one with
 the most of them wins), else the host of a service's server URL, else the service the input names (`generic`) or
 `--service`. The method and the path, segment by segment, then pick the endpoint template. A request that matches
 no endpoint adds no row.
+
+**Known limits.** A template with a parameter inside a segment, such as `/files/{id}.json`, `/orders/{id}:cancel`
+or `/v{version}/x`, is not matched yet: requests to it count as matching no endpoint. Matching is case-sensitive,
+the base path of a server URL included.
 
 ### Supported sources
 
@@ -532,7 +537,7 @@ no endpoint adds no row.
 | `generic` | Any other tool | `csv`, `json` | CSV with a header line, a JSON array of objects or one JSON object per line, with the columns `caller,callerKind,service,method,path,count,lastSeen`. `caller` (or the `--caller-field` column), `method`, `path` and `lastSeen` are required; `callerKind`, `service` and `count` may be left out or empty. | The `caller` column (`callerKind`: `client` or `service`, default `client`). | A column. |
 | `kong` | Kong | | The file-log plugin's log (one JSON object per line) or an http-log batch (a JSON array). | The consumer: `consumer.username`, else `custom_id`, else `id` (`client`). | A dotted path, such as `consumer.custom_id` or `request.headers.x-client-id`. |
 | `nginx` | NGINX | | An access log written in the JSON log format the printed configuration adds (one JSON object per line). | The `caller` member, which that format fills from the `X-Client-Id` request header (`client`). | A member of the log line. |
-| `otel` | OpenTelemetry | `opentelemetry`, `otlp` | The OpenTelemetry Collector file exporter's OTLP JSON (one object per line), with the printed Collector configuration, which keeps the HTTP client spans. | The calling service, the resource attribute `service.name` (`service`). | A resource attribute. |
+| `otel` | OpenTelemetry | `opentelemetry`, `otlp` | The OpenTelemetry Collector file exporter's OTLP JSON (one object per line), with the printed Collector configuration, which keeps the HTTP client spans. Its `filter` processor's `trace_conditions` needs the Collector's contrib distribution, 0.146.0 or later. | The calling service, the resource attribute `service.name` (`service`). | A resource attribute. |
 
 "The printed query" is what `graphwake usage query --source <preset>` prints: the query, the API call or the
 configuration that produces the input (for `generic`, the header line and one example line). It needs no key and
@@ -559,13 +564,13 @@ A flag wins over the variable. The two switches take `true`, `1`, `yes` or `on` 
 | Flag | Variable | Meaning |
 |---|---|---|
 | `--source` | `GRAPHWAKE_USAGE_SOURCE` | The preset or one of its other names (see [Supported sources](#supported-sources)). Required. |
-| `--input` | `GRAPHWAKE_USAGE_INPUT` | The file to read. Default: standard input, when something is piped into it (a terminal is not read). |
+| `--input` | `GRAPHWAKE_USAGE_INPUT` | The file to read. Default: standard input, when something is piped into it (a terminal is not read). In CI always pass `--input`: the agent waits for piped input until the pipe is closed. |
 | `--key` | `GRAPHWAKE_USAGE_KEY` | The usage key. Required, also for `--dry-run`. Use the variable from a CI secret; the flag is accepted but shows up in process lists. |
 | `--url` | `GRAPHWAKE_URL` | Graphwake API URL, the same variable `upload` reads. Default `https://api.graphwake.com`. |
 | `--service` | `GRAPHWAKE_USAGE_SERVICE` | The Graphwake service a request belongs to when no mapping, no server URL host and no `service` column decides it. It must name a service in the endpoint list. Default: none. |
 | `--caller-field` | `GRAPHWAKE_USAGE_CALLER_FIELD` | The field that names the caller (see the last column of [Supported sources](#supported-sources)). Default: the preset's. |
-| `--no-counts` | `GRAPHWAKE_USAGE_NO_COUNTS=true` | Send no request counts: the rows have no `count` and `countsIncluded` is `false`. Default: off, counts are sent. |
-| `--dry-run` | `GRAPHWAKE_USAGE_DRY_RUN=true` | Fetch the endpoint list, build the summary and print it with what stays on this machine, and say so when the summary has no rows and would not be sent. Nothing is sent. Default: off. |
+| `--no-counts` | `GRAPHWAKE_USAGE_NO_COUNTS=true` | Send no per-row request counts: the rows have no `count` and `countsIncluded` is `false`. The three totals (`unmatchedRequests`, `withheldRequests`, `anonymousRequests`) are still sent. Default: off, counts are sent. |
+| `--dry-run` | `GRAPHWAKE_USAGE_DRY_RUN=true` | Fetch the endpoint list, build the summary and print it with what is not sent (see [What the usage step sends](#what-the-usage-step-sends)), and say so when the summary has no rows and would not be sent. It sends no summary; it only fetches the endpoint list with the usage key. Default: off. |
 
 `graphwake usage -h` prints the help.
 
@@ -608,7 +613,8 @@ input, a row gets only these: the value of the field you choose as the caller (t
 `--caller-field`), sent as the caller name unless it is withheld; in `generic`, the `callerKind` column (`client` or
 `service`; the other presets set the kind themselves); the number of requests; and their days. Nothing is
 sent from any other field: not a request's path or query string, host, API name, other headers, body, status code
-or client IP address. Those only find the endpoint, on this machine, or are not read at all.
+or client IP address. Those only find the endpoint, on this machine, or are not read at all; `--dry-run` also
+prints the host and a masked path prefix of the requests that matched no endpoint (see below).
 
 Headers are the common case of that rule: no header value is sent except the one you choose as the caller name. The
 NGINX format that `graphwake usage query --source nginx` prints fills `caller` from the `X-Client-Id` header
@@ -752,7 +758,7 @@ configuration). The usage key is never printed. Warnings use the CI's warning fo
 | warning `usage not sent: the summary is too large` | Over the row limit or 10 MB (the agent's check or Graphwake's). |
 | warning `usage not sent: the summary could not be built` | An internal problem building the summary. |
 | warning `usage not sent: no caller names were found in the input. Check --caller-field` | No request had a caller name. |
-| warning `usage not sent: no caller name could be sent: every name was withheld (it looked like an e-mail address, an IP address, a secret, a path or a URL) or was missing. Check --caller-field` | Every request was withheld or had no caller name. |
+| warning `usage not sent: no caller name could be sent: every name was withheld (it matched a withholding rule: see the README) or was missing. Check --caller-field` | Every request was withheld or had no caller name. |
 | warning `usage not sent: nothing in the input matched an endpoint` | Check the mappings, the server URLs or `--service`; `--dry-run` shows the unmatched hosts and paths. |
 | warning `usage not sent: Graphwake's endpoint list could not be read` | The endpoint list answer was not valid. |
 | warning `usage not sent: the key was not accepted` | HTTP 401: check `GRAPHWAKE_USAGE_KEY`. |
@@ -763,7 +769,7 @@ configuration). The usage key is never printed. Warnings use the CI's warning fo
 | warning `usage not sent: Graphwake could not be reached` | Network error or HTTP 503 after 3 attempts. |
 | warning `usage not sent: unexpected response 500` | Any other status, a redirect (3xx) too: redirects are never followed. |
 | warning `unknown source "<name>" (one of: ...)` | `graphwake usage query` with an unknown or missing source (`no source given (one of: ...)`). |
-| `graphwake: internal error, nothing sent` | A bug in the agent; it still exits 0. |
+| warning `usage not sent: internal error` | A bug in the agent; it still exits 0. Always `WARNING graphwake: usage not sent: internal error`, whatever the CI. |
 
 "The export was incomplete" means: a Datadog answer whose `meta` reports a status other than `done` or a warning,
 or an answer cut short (it ends early, or the next answer starts where its next bucket belongs); or an Application
