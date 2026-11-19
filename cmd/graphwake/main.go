@@ -1,4 +1,5 @@
-// Command graphwake sends a service's OpenAPI spec from a CI pipeline to Graphwake.
+// Command graphwake sends a service's OpenAPI spec from a CI pipeline to Graphwake, and a usage summary read from a
+// gateway log or trace export.
 //
 // It never fails a pipeline unless asked to: problems are written as one warning line with exit code 0. The only
 // exit code 1 is a failed --fail-on check on an open pull request build.
@@ -22,5 +23,7 @@ func main() {
 			os.Exit(0)
 		}
 	}()
-	os.Exit(cli.Main(os.Args[1:], cli.DefaultDeps(version, os.Stdout)))
+	deps := cli.DefaultDeps(version, os.Stdout)
+	deps.Stdin = os.Stdin
+	os.Exit(cli.Main(os.Args[1:], deps))
 }

@@ -22,6 +22,7 @@ import (
 
 const (
 	testKey  = "dsk_TOPSECRET_key_value"
+	usageKey = "gwu_TOPSECRET_usage_key"
 	ghToken  = "ghs_TOPSECRET_token"
 	adoToken = "ado_TOPSECRET_token"
 	mainSHA  = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -62,6 +63,21 @@ type backend struct {
 	adoLabels     []string
 	adoThreads    []adoThread
 	adoWrites     []string // "POST thread", "PATCH comment <thread>", "PATCH thread <thread> <status>"
+
+	// The usage routes: templatesStatus/templates answer GET /api/ingest/usage/templates, usageStatus/usageBody
+	// answer POST /api/ingest/usage. Every usage request is recorded.
+	templatesStatus int
+	templates       string
+	usageStatus     int
+	usageBody       string
+	usageGets       int
+	usagePosts      []usagePost
+}
+
+// usagePost is one recorded POST /api/ingest/usage.
+type usagePost struct {
+	Body   []byte
+	Header http.Header
 }
 
 type ghComment struct {
@@ -78,7 +94,8 @@ type adoThread struct {
 const adoPR = "/ado/org/Shop/_apis/git/repositories/repo-1/pullRequests/42/"
 
 func newBackend(t *testing.T) *backend {
-	b := &backend{t: t, status: 200, body: `{"outcome":"Changed","changes":[]}`}
+	b := &backend{t: t, status: 200, body: `{"outcome":"Changed","changes":[]}`,
+		templatesStatus: 200, templates: usageTemplates, usageStatus: 200, usageBody: usageAnswer}
 	b.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b.mu.Lock()
 		delay := b.ghLabelsDelay
@@ -103,6 +120,18 @@ func newBackend(t *testing.T) *backend {
 			b.auth = append(b.auth, r.Header.Get("Authorization"))
 			w.WriteHeader(b.status)
 			io.WriteString(w, b.body)
+		case r.URL.Path == "/api/ingest/usage/templates" && r.Method == http.MethodGet:
+			b.usageGets++
+			if r.Header.Get("Authorization") != "Bearer "+usageKey {
+				t.Errorf("templates call with Authorization %q", r.Header.Get("Authorization"))
+			}
+			w.WriteHeader(b.templatesStatus)
+			io.WriteString(w, b.templates)
+		case r.URL.Path == "/api/ingest/usage" && r.Method == http.MethodPost:
+			data, _ := io.ReadAll(r.Body)
+			b.usagePosts = append(b.usagePosts, usagePost{Body: data, Header: r.Header.Clone()})
+			w.WriteHeader(b.usageStatus)
+			io.WriteString(w, b.usageBody)
 		case strings.HasPrefix(r.URL.Path, "/gh/"):
 			b.ghCalls++
 			if r.Header.Get("Authorization") != "Bearer "+ghToken {
@@ -264,6 +293,8 @@ type run struct {
 	env  map[string]string
 	git  fakeGit
 	args []string
+	// stdin is what the command reads as standard input (nil: none, like a terminal).
+	stdin io.Reader
 	// platformDeadline replaces the budget for platform API calls (0: 2 s).
 	platformDeadline time.Duration
 }
@@ -285,13 +316,27 @@ func (b *backend) exec(t *testing.T, r run) (string, int) {
 	specPath := filepath.Join(dir, "openapi.json")
 	os.WriteFile(specPath, []byte(`{"openapi":"3.0.0"}`), 0o600)
 
-	env := map[string]string{"GRAPHWAKE_KEY": testKey, "GRAPHWAKE_URL": b.srv.URL, "GRAPHWAKE_SPEC": specPath}
+	s, code := b.main(t, "upload", r, map[string]string{"GRAPHWAKE_SPEC": specPath})
+	if strings.Count(s, "\n") != 1 {
+		t.Errorf("want exactly one output line, got %q", s)
+	}
+	return strings.TrimSuffix(s, "\n"), code
+}
+
+// main runs Main(command, r.args...) against the fakes with the base environment (both keys, the fake's URL), env
+// and r.env on top, and fails the test when any secret is in the output.
+func (b *backend) main(t *testing.T, command string, r run, env map[string]string) (string, int) {
+	t.Helper()
+	all := map[string]string{"GRAPHWAKE_KEY": testKey, "GRAPHWAKE_USAGE_KEY": usageKey, "GRAPHWAKE_URL": b.srv.URL}
+	for k, v := range env {
+		all[k] = v
+	}
 	for k, v := range r.env {
 		if v == "<unset>" {
-			delete(env, k)
+			delete(all, k)
 			continue
 		}
-		env[k] = strings.ReplaceAll(v, "{srv}", b.srv.URL)
+		all[k] = strings.ReplaceAll(v, "{srv}", b.srv.URL)
 	}
 	var out bytes.Buffer
 	reader := spec.NewReader(ingest.MaxBodyBytes)
@@ -300,8 +345,9 @@ func (b *backend) exec(t *testing.T, r run) (string, int) {
 	d := Deps{
 		Version:        "1.0.0-test",
 		Out:            &out,
-		Getenv:         func(k string) string { return env[k] },
+		Getenv:         func(k string) string { return all[k] },
 		ReadFile:       os.ReadFile,
+		Stdin:          r.stdin,
 		Git:            r.git,
 		HTTP:           &http.Client{Timeout: 2 * time.Second},
 		Spec:           reader,
@@ -317,15 +363,14 @@ func (b *backend) exec(t *testing.T, r run) (string, int) {
 	if d.Git == nil {
 		d.Git = fakeGit{}
 	}
-	code := Main(append([]string{"upload"}, r.args...), d)
+	code := Main(append([]string{command}, r.args...), d)
 	s := out.String()
-	if strings.Count(s, "\n") != 1 {
-		t.Errorf("want exactly one output line, got %q", s)
+	for _, secret := range []string{testKey, usageKey, ghToken, adoToken} {
+		if strings.Contains(s, secret) {
+			t.Errorf("secret printed: %q", s)
+		}
 	}
-	if strings.Contains(s, testKey) || strings.Contains(s, ghToken) || strings.Contains(s, adoToken) {
-		t.Errorf("secret printed: %q", s)
-	}
-	return strings.TrimSuffix(s, "\n"), code
+	return s, code
 }
 
 func githubEnv(event, payload string, extra map[string]string) map[string]string {

@@ -1,6 +1,6 @@
 // Package cli is the graphwake command: it reads the configuration, detects the CI context, decides what to send
-// and sends it. Whatever happens it prints one line. The exit code is 0 except when --fail-on was given on an open
-// pull request build and the server's check failed.
+// and sends it. Whatever happens it prints one line (usage --dry-run and usage query print several). The exit code
+// is 0 except when --fail-on was given on an open pull request build and the server's check failed.
 package cli
 
 import (
@@ -23,8 +23,10 @@ import (
 
 // Deps are the agent's connections to the outside world, replaced in tests.
 type Deps struct {
-	Version  string
-	Out      io.Writer
+	Version string
+	Out     io.Writer
+	// Stdin is the usage command's input when --input is not given; nil means none.
+	Stdin    io.Reader
 	Getenv   ci.Getenv
 	ReadFile ci.ReadFile
 	Git      gitx.Runner
@@ -61,10 +63,13 @@ func DefaultDeps(version string, out io.Writer) Deps {
 	}
 }
 
-const usage = `graphwake sends your service's OpenAPI spec from CI to Graphwake.
+const helpText = `graphwake sends your service's OpenAPI spec from CI to Graphwake.
 
 commands:
   graphwake upload --spec <file|http(s)-url> [flags]   send the spec (see "graphwake upload -h")
+  graphwake usage --source <preset> [flags]            send a usage summary from a gateway log or trace export
+                                                       (see "graphwake usage -h")
+  graphwake usage query --source <preset>              print the query or configuration that produces the input
   graphwake version                                    print the version`
 
 // Main runs the command and returns the exit code. Every problem is one printed line and exit code 0; only a
@@ -84,8 +89,15 @@ func Main(args []string, d Deps) int {
 		io.WriteString(d.Out, "graphwake "+d.Version+"\n")
 	case "upload":
 		return upload(args[1:], d)
+	case "usage":
+		switch {
+		case len(args) > 1 && args[1] == "query":
+			return usageQuery(args[2:], d)
+		default:
+			return usageSend(args[1:], d)
+		}
 	case "help", "-h", "--help":
-		io.WriteString(d.Out, usage+"\n")
+		io.WriteString(d.Out, helpText+"\n")
 	default:
 		// Never the argument itself: it may be the key passed by mistake.
 		r.Warn("%s", "unknown command; use \"graphwake upload\" or \"graphwake version\"")

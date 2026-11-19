@@ -113,7 +113,7 @@ type Result struct {
 	PR *PROutcome
 }
 
-// Client posts to the ingest endpoint with a few retries for network errors and 503.
+// Client calls Graphwake's ingest endpoints with a few retries for network errors and 503.
 type Client struct {
 	BaseURL   string
 	Key       string
@@ -129,7 +129,18 @@ type Client struct {
 
 // Send posts an encoded body (from Encode).
 func (c *Client) Send(ctx context.Context, body []byte) Result {
-	endpoint := strings.TrimRight(c.BaseURL, "/") + "/api/ingest/specs"
+	status, answer, err := c.Do(ctx, http.MethodPost, "/api/ingest/specs", body)
+	if err != nil {
+		return Result{Warning: "Graphwake unavailable, spec not sent"}
+	}
+	return Interpret(status, answer)
+}
+
+// Do sends one request to BaseURL+path with the client's key and user agent (and a JSON content type when body is
+// not nil) under its retry policy: up to Attempts tries on a network error or 503, waiting Backoff and then twice as
+// long before each new try. It returns the last answer, or err when no answer was received.
+func (c *Client) Do(ctx context.Context, method, path string, body []byte) (status int, answer []byte, err error) {
+	endpoint := strings.TrimRight(c.BaseURL, "/") + path
 	if c.Deadline > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, c.Deadline)
@@ -141,30 +152,33 @@ func (c *Client) Send(ctx context.Context, body []byte) Result {
 		attempts = 1
 	}
 	for attempt := 1; ; attempt++ {
-		status, respBody, err := c.post(ctx, endpoint, body)
+		status, answer, err = c.request(ctx, method, endpoint, body)
 		transient := err != nil || status == http.StatusServiceUnavailable
 		if !transient || attempt >= attempts || ctx.Err() != nil {
-			if err != nil {
-				return Result{Warning: "Graphwake unavailable, spec not sent"}
-			}
-			return Interpret(status, respBody)
+			return status, answer, err
 		}
 		c.Sleep(ctx, wait)
 		wait *= 2
 	}
 }
 
-func (c *Client) post(ctx context.Context, endpoint string, body []byte) (int, []byte, error) {
+func (c *Client) request(ctx context.Context, method, endpoint string, body []byte) (int, []byte, error) {
 	if c.AttemptTimeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, c.AttemptTimeout)
 		defer cancel()
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, reader)
 	if err != nil {
 		return 0, nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.Key)
 	req.Header.Set("User-Agent", c.UserAgent)
