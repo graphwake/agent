@@ -169,8 +169,8 @@ func TestDatadog_concrete_and_template_paths_pass_through(t *testing.T) {
 	}
 }
 
-// The documented workflow appends one answer per calling service to one file: curl writes no newline, so the
-// answers follow one another on one line; they may also be on separate lines or pretty-printed.
+// The documented workflow appends one answer per calling service to one file, each on its own line (curl -w '\n');
+// without that the answers follow one another on one line. They may also be pretty-printed.
 func TestDatadog_several_answers_in_one_file(t *testing.T) {
 	one := strings.TrimSpace(readTestdata(t, "datadog-aggregate.json"))
 	two := ddAnswer(ddDone, ddBucket(`"service":"billing-worker","@http.url_details.host":"orders.internal","@http.url_details.path":"/v1/orders","@http.method":"GET"`, "4"))
@@ -245,5 +245,51 @@ func TestDatadog_day_comes_from_the_clock(t *testing.T) {
 	clock := func() time.Time { calls++; return ddClock() }
 	if _, _, err := ddParse(t, in+in+in, ParseOptions{Now: clock}); err != nil || calls != 1 {
 		t.Errorf("clock read %d times, err = %v; want once", calls, err)
+	}
+}
+
+// One answer cut short (curl stopped, a disk filled up) never hides the answers after it, and the result is Partial:
+// a cut answer is incomplete by definition.
+func TestDatadog_cut_answer_does_not_hide_later_answers(t *testing.T) {
+	b := func(service string) string {
+		return ddBucket(`"service":"`+service+`","@http.url_details.host":"orders.internal","@http.url_details.path":"/v1/orders/1","@http.method":"GET"`, "1")
+	}
+	good1, good2 := ddAnswer(ddDone, b("good-1")), ddAnswer(ddDone, b("good-2"))
+	timeout := ddAnswer(`{"status":"timeout"}`, b("late"))
+	cases := []struct {
+		name, input string
+		callers     []string
+		skipped     int64
+	}{
+		// From the review: a cut answer, then two good answers on the next lines.
+		{"cut inside a string", `{"data":[` + b("cut") + `,{"type":"buck` + "\n" + good1 + "\n" + good2 + "\n", []string{"cut", "good-1", "good-2"}, 1},
+		{"cut after a bucket", `{"data":[` + b("cut") + "\n" + good1 + "\n" + good2 + "\n", []string{"cut", "good-1", "good-2"}, 1},
+		{"cut after a comma", `{"data":[` + b("cut") + ",\n" + good1 + "\n" + good2 + "\n", []string{"cut", "good-1", "good-2"}, 1},
+		{"cut after a comma, answers on one line", `{"data":[` + b("cut") + ",\n" + good1 + good2, []string{"cut", "good-1", "good-2"}, 1},
+		// A cut after "," then a timed-out answer: that answer's records, its meta read.
+		{"cut after a comma, then a timeout", `{"data":[` + b("cut") + ",\n" + timeout + "\n", []string{"cut", "late"}, 1},
+		// A cut right after "[" then a good answer.
+		{"cut after the bracket", `{"data":[` + "\n" + good1 + "\n", []string{"good-1"}, 1},
+		{"cut after the bracket, same line", `{"data":[` + good1 + good2, []string{"good-1", "good-2"}, 1},
+		// A meta-first answer is an answer too.
+		{"cut, then a meta-first answer", `{"data":[` + b("cut") + ",\n" + `{"meta":{"status":"done"},"data":[` + b("good-1") + `]}`, []string{"cut", "good-1"}, 1},
+		// The input ends before the answer closes.
+		{"input ends inside data", good1 + "\n" + `{"data":[` + b("cut"), []string{"good-1", "cut"}, 1},
+		{"input ends before meta", good1 + "\n" + `{"data":[` + b("cut") + `]`, []string{"good-1", "cut"}, 1},
+	}
+	for _, c := range cases {
+		got, res, err := ddParse(t, c.input, ParseOptions{})
+		var callers []string
+		for _, r := range got {
+			callers = append(callers, r.Caller)
+		}
+		if err != nil || !res.Partial || res.Skipped != c.skipped || strings.Join(callers, ",") != strings.Join(c.callers, ",") {
+			t.Errorf("%s: callers = %v, result = %+v, err = %v; want %v, partial, %d skipped", c.name, callers, res, err, c.callers, c.skipped)
+		}
+	}
+
+	// A complete file with a bucket-like object that has neither "data" nor "meta" is not Partial.
+	if _, res, err := ddParse(t, good1+"\n"+good2, ParseOptions{}); err != nil || res.Partial {
+		t.Errorf("complete answers: result = %+v, err = %v", res, err)
 	}
 }

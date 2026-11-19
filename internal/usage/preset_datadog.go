@@ -2,6 +2,7 @@ package usage
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"math"
 	"strconv"
@@ -12,7 +13,7 @@ import (
 // datadogQuery is the Datadog API call whose answers the datadog preset reads.
 const datadogQuery = `# Datadog APM: count outgoing HTTP calls of one service, last 7 days.
 # Run once per calling service (replace orders); append every answer to one file.
-curl -s -X POST "https://api.${DD_SITE:-datadoghq.com}/api/v2/spans/analytics/aggregate" \
+curl -s -w '\n' -X POST "https://api.${DD_SITE:-datadoghq.com}/api/v2/spans/analytics/aggregate" \
   -H "Content-Type: application/json" \
   -H "DD-API-KEY: ${DD_API_KEY}" -H "DD-APPLICATION-KEY: ${DD_APP_KEY}" \
   -d '{"data":{"type":"aggregate_request","attributes":{
@@ -27,7 +28,8 @@ curl -s -X POST "https://api.${DD_SITE:-datadoghq.com}/api/v2/spans/analytics/ag
 // datadogPreset reads answers of POST /api/v2/spans/analytics/aggregate, any number of them one after another. Every
 // bucket of "data" is a group of calls of the service its "by" facets name. An answer carries no day: every record
 // gets the day the preset runs (UTC). An answer whose meta reports a status other than "done" or any warning makes
-// the result Partial; its buckets are still read.
+// the result Partial; its buckets are still read. So does an answer cut short: it ends early (a syntax error or the
+// end of the input), or a new answer starts where its next bucket belongs.
 var datadogPreset = Preset{Name: "datadog", DefaultKind: "service", Parse: parseDatadog, Query: datadogQuery}
 
 // The facets of a bucket's "by" the preset reads, in the order it tries them.
@@ -59,13 +61,18 @@ func parseDatadog(r io.Reader, opts ParseOptions, emit func(Record)) (ParseResul
 	}
 	partial := false
 	read, skipped, err := eachJSONObject(br, first, func(s *jsonStream, count func(bool)) error {
-		return datadogAnswer(s, count, &partial, func(raw json.RawMessage) bool {
+		err := datadogAnswer(s, count, &partial, func(raw json.RawMessage) bool {
 			rec, ok := datadogRecord(raw, callerField, day)
 			if ok {
 				emit(rec)
 			}
 			return ok
 		})
+		var restart *restartError
+		if errors.As(err, &restart) || err != nil && !isReadError(err) {
+			partial = true // the answer was cut short
+		}
+		return err
 	})
 	res, err := finish("datadog", read, skipped, err)
 	res.Partial = partial
@@ -73,7 +80,9 @@ func parseDatadog(r io.Reader, opts ParseOptions, emit func(Record)) (ParseResul
 }
 
 // datadogAnswer reads one answer: its buckets are streamed to bucket and counted, its meta may set partial. An
-// object without a "data" array (such as an error answer, {"errors":[...]}) is one skipped value.
+// object without a "data" array (such as an error answer, {"errors":[...]}) is one skipped value. An object with a
+// "data" or "meta" member where a bucket belongs is the next answer: this one was cut short, and the *restartError
+// hands the next answer back to be read on its own.
 func datadogAnswer(s *jsonStream, count func(bool), partial *bool, bucket func(json.RawMessage) bool) error {
 	if _, err := s.Token(); err != nil { // '{'
 		return err
@@ -102,6 +111,9 @@ func datadogAnswer(s *jsonStream, count func(bool), partial *bool, bucket func(j
 				if err != nil {
 					return err
 				}
+				if datadogAnswerStart(raw) {
+					return &restartError{raw: raw}
+				}
 				count(bucket(raw))
 			}
 			if _, err = s.Token(); err != nil { // ']'
@@ -128,6 +140,21 @@ func datadogAnswer(s *jsonStream, count func(bool), partial *bool, bucket func(j
 		count(false)
 	}
 	return nil
+}
+
+// datadogAnswerStart reports whether a value is an object with a top-level "data" or "meta" member: the start of an
+// answer, never a bucket.
+func datadogAnswerStart(raw json.RawMessage) bool {
+	o, ok := decodeObject(raw)
+	if !ok {
+		return false
+	}
+	for key := range o {
+		if strings.EqualFold(key, "data") || strings.EqualFold(key, "meta") {
+			return true
+		}
+	}
+	return false
 }
 
 // datadogIncomplete reports whether an answer's meta says the answer is incomplete: a status other than "done", or a

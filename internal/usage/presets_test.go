@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 )
 
@@ -125,7 +126,7 @@ AppDependencies
 `
 	datadog := `# Datadog APM: count outgoing HTTP calls of one service, last 7 days.
 # Run once per calling service (replace orders); append every answer to one file.
-curl -s -X POST "https://api.${DD_SITE:-datadoghq.com}/api/v2/spans/analytics/aggregate" \
+curl -s -w '\n' -X POST "https://api.${DD_SITE:-datadoghq.com}/api/v2/spans/analytics/aggregate" \
   -H "Content-Type: application/json" \
   -H "DD-API-KEY: ${DD_API_KEY}" -H "DD-APPLICATION-KEY: ${DD_APP_KEY}" \
   -d '{"data":{"type":"aggregate_request","attributes":{
@@ -192,8 +193,16 @@ access_log /var/log/nginx/usage.log graphwake_usage;
 
 const marker = "SECRET-MARKER-8812"
 
-// Every preset skips a broken line or element between good ones, counts it, and never puts its content in an error.
-func TestParsers_skip_bad_lines_and_count(t *testing.T) {
+// badLineCase is one input with broken lines or elements between good ones, and what a preset makes of it.
+type badLineCase struct {
+	name, preset, input string
+	records             int
+	skipped             int64
+}
+
+// badLineCases are the inputs of TestParsers_skip_bad_lines_and_count; TestParsers_chunked_reads_match_plain reads
+// them again in small pieces.
+func badLineCases() []badLineCase {
 	apimRow := `{"ApimSubscriptionId":"checkout-web","ApiId":"orders-api","Method":"GET","Host":"gateway.example","Path":"/orders/1","Calls":"2","LastSeen":"2026-11-18T09:12:44Z","TableName":"PrimaryResult"}`
 	otelLine := `{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"checkout-web"}}]},"scopeSpans":[{"spans":[{"kind":3,"startTimeUnixNano":"1794993164000000000","attributes":[{"key":"http.request.method","value":{"stringValue":"GET"}},{"key":"url.full","value":{"stringValue":"https://orders.internal/v1/orders/1"}}]}]}]}]}`
 	kongRow := `{"consumer":{"username":"checkout-web"},"request":{"headers":{"host":"gateway.example"},"uri":"/orders/1","method":"GET","querystring":{}},"started_at":1794993164000}`
@@ -206,11 +215,7 @@ func TestParsers_skip_bad_lines_and_count(t *testing.T) {
 	ddDoc := `{"data":[` + ddBucket + `],"meta":{"status":"done"}}`
 	garbage := marker + ` not a record {"x":`
 	errorLine := `[error] something went wrong ` + marker
-	cases := []struct {
-		name, preset, input string
-		records             int
-		skipped             int64
-	}{
+	return []badLineCase{
 		{"generic csv", "generic", "caller,method,path,lastSeen\na,GET,/x,2026-11-18\n" + garbage + "\nb,GET,/y,2026-11-18\n", 2, 1},
 		{"generic csv bad values", "generic", "caller,callerKind,method,path,count,lastSeen\n" +
 			"a,client,GET,/x,1,2026-11-18\n" +
@@ -258,7 +263,11 @@ func TestParsers_skip_bad_lines_and_count(t *testing.T) {
 		{"datadog answer cut inside a string", "datadog", `{"data":[{"type":"buck` + marker + "\n" + ddDoc, 1, 1},
 		{"datadog answer cut at the end", "datadog", ddDoc + "\n" + `{"data":[` + ddBucket, 2, 1},
 	}
-	for _, c := range cases {
+}
+
+// Every preset skips a broken line or element between good ones, counts it, and never puts its content in an error.
+func TestParsers_skip_bad_lines_and_count(t *testing.T) {
+	for _, c := range badLineCases() {
 		t.Run(c.name, func(t *testing.T) {
 			got, skipped, err := parse(t, c.preset, c.input, ParseOptions{})
 			if err != nil {
@@ -568,5 +577,85 @@ func TestEachJSONObject_many_large_objects(t *testing.T) {
 	})
 	if err != nil || read != int64(n) || skipped != 0 || next != n {
 		t.Errorf("read = %d, skipped = %d, err = %v; want %d, 0, nil", read, skipped, err, n)
+	}
+}
+
+// chunkReader hands out at most n bytes per Read.
+type chunkReader struct {
+	r io.Reader
+	n int
+}
+
+func (c *chunkReader) Read(p []byte) (int, error) {
+	if len(p) > c.n {
+		p = p[:c.n]
+	}
+	return c.r.Read(p)
+}
+
+// How the reader hands out the input never changes the result: the array and object readers resync the same way
+// whether the decoder sees the input in one piece, one byte at a time or in small chunks.
+func TestParsers_chunked_reads_match_plain(t *testing.T) {
+	type input struct{ name, preset, text string }
+	var inputs []input
+	for _, c := range badLineCases() {
+		inputs = append(inputs, input{c.name, c.preset, c.input})
+	}
+	for _, f := range []struct{ preset, file string }{
+		{"apim", "apim-log-analytics.json"}, {"kong", "kong-http-log-batch.json"}, {"appinsights", "appinsights-tables.json"},
+		{"appinsights", "appinsights-log-analytics.json"}, {"datadog", "datadog-aggregate.json"},
+	} {
+		data, err := os.ReadFile(filepath.Join("testdata", f.file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		inputs = append(inputs, input{f.file, f.preset, string(data)})
+	}
+	b := `{"type":"bucket","attributes":{"by":{"service":"s","@http.url_details.path":"/v1/orders/1","@http.method":"GET"},"compute":{"c0":1}}}`
+	good := `{"data":[` + b + `],"meta":{"status":"done"}}`
+	pretty := "{\n  \"data\": [\n    " + b + ",\n    " + b + "\n  ],\n  \"meta\": {\"status\": \"done\"}\n}\n"
+	for name, text := range map[string]string{
+		"cut inside a string":   `{"data":[` + b + `,{"type":"buck` + "\n" + good + "\n" + good,
+		"cut after a bucket":    `{"data":[` + b + "\n" + good + "\n" + good,
+		"cut after a comma":     `{"data":[` + b + ",\n" + good + good,
+		"cut after the bracket": `{"data":[` + "\n" + good,
+		"cut pretty-printed":    pretty[:len(pretty)/2] + "\n" + pretty + good,
+		"answers on one line":   good + good + " " + good,
+		"input ends inside":     good + "\n" + `{"data":[` + b,
+	} {
+		inputs = append(inputs, input{"datadog " + name, "datadog", text})
+	}
+	inputs = append(inputs,
+		input{"apim arrays", "apim", "[{\"Method\":\"GET\",\"Path\":\"/x\",\"LastSeen\":\"2026-11-18\"},\n oops\n{\"Method\":\"GET\",\"Path\":\"/y\",\"LastSeen\":\"2026-11-18\"}]" +
+			"[{\"Method\":\"GET\",\"Path\":\"/z\",\"LastSeen\":\"2026-11-18\"},{\"Method\":\"GET\",\"Path\":\"/w\",\"LastSeen\":\"2026-11-18\"}\n{\"Method\":\"GET\",\"Path\":\"/v\",\"LastSeen\":\"2026-11-18\"}\n"})
+
+	type outcome struct {
+		records []Record
+		res     ParseResult
+		err     string
+	}
+	run := func(preset string, r io.Reader) outcome {
+		p, _ := PresetByName(preset)
+		var o outcome
+		res, err := p.Parse(r, ParseOptions{Now: ddClock}, func(rec Record) { o.records = append(o.records, rec) })
+		o.res = res
+		if err != nil {
+			o.err = err.Error()
+		}
+		return o
+	}
+	readers := map[string]func(string) io.Reader{
+		"one byte": func(s string) io.Reader { return iotest.OneByteReader(strings.NewReader(s)) },
+		"3 bytes":  func(s string) io.Reader { return &chunkReader{strings.NewReader(s), 3} },
+		"7 bytes":  func(s string) io.Reader { return &chunkReader{strings.NewReader(s), 7} },
+		"half":     func(s string) io.Reader { return iotest.HalfReader(strings.NewReader(s)) },
+	}
+	for _, in := range inputs {
+		want := run(in.preset, strings.NewReader(in.text))
+		for rname, reader := range readers {
+			if got := run(in.preset, reader(in.text)); !reflect.DeepEqual(got, want) {
+				t.Errorf("%s, %s: %+v\nwant %+v", in.name, rname, got, want)
+			}
+		}
 	}
 }

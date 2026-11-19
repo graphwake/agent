@@ -45,7 +45,10 @@ func parseAppInsights(r io.Reader, opts ParseOptions, emit func(Record)) (ParseR
 		}
 		return ok
 	}
-	var read, skipped int64
+	var (
+		read, skipped int64
+		partial       bool
+	)
 	if first == '[' {
 		// Log Analytics rows: an array of objects, read as the apim preset reads them.
 		read, skipped, err = eachJSONValue(br, first, func(raw []byte) bool {
@@ -54,18 +57,22 @@ func parseAppInsights(r io.Reader, opts ParseOptions, emit func(Record)) (ParseR
 		})
 	} else {
 		read, skipped, err = eachJSONObject(br, first, func(s *jsonStream, count func(bool)) error {
-			return appInsightsObject(s, count, opts.CallerField, row)
+			return appInsightsObject(s, count, opts.CallerField, &partial, row)
 		})
 	}
-	return finish("appinsights", read, skipped, err)
+	res, err := finish("appinsights", read, skipped, err)
+	res.Partial = partial
+	return res, err
 }
 
 // appInsightsRow reads one row through get, emits its record and reports whether it could.
 type appInsightsRow func(get func(name string) (string, bool)) bool
 
 // appInsightsObject reads one top-level object: an API answer with "tables", whose rows are streamed, else one Log
-// Analytics row. Of a row object only the query's columns (and the --caller-field column) are kept.
-func appInsightsObject(s *jsonStream, count func(bool), callerField string, row appInsightsRow) error {
+// Analytics row. Of a row object only the query's columns (and the --caller-field column) are kept. An "error" member
+// that is not null (the API reports partial results, such as a truncated answer, that way) sets partial; nothing of it
+// is kept.
+func appInsightsObject(s *jsonStream, count func(bool), callerField string, partial *bool, row appInsightsRow) error {
 	if _, err := s.Token(); err != nil { // '{'
 		return err
 	}
@@ -79,6 +86,14 @@ func appInsightsObject(s *jsonStream, count func(bool), callerField string, row 
 		case strings.EqualFold(key, "tables"):
 			answer = true
 			err = appInsightsTables(s, count, row)
+		case strings.EqualFold(key, "error"):
+			var t json.Token
+			if t, err = s.Token(); err == nil {
+				if t != nil {
+					*partial = true
+				}
+				err = s.Skip(t)
+			}
 		case appInsightsColumn(key, callerField):
 			var raw json.RawMessage
 			if raw, err = s.Value(); err == nil {

@@ -465,10 +465,24 @@ func TestUsage_partial_export_is_never_silent(t *testing.T) {
 			t.Errorf("%s: out = %q", name, out)
 		}
 	}
-	// An empty export that the tool did not flag keeps its own message.
-	if out := b.usageRun(t, run{args: []string{"--source", "datadog"}, stdin: strings.NewReader(`{"data":[],"meta":{"status":"done"}}`)}, false); out !=
-		"WARNING graphwake: usage not sent: no input (give --input or pipe a file)" {
-		t.Errorf("complete empty export: out = %q", out)
+	// A complete export that held no requests says so; a truly empty input keeps its own message.
+	for name, c := range map[string]struct {
+		args        []string
+		stdin, want string
+	}{
+		"no buckets":           {[]string{"--source", "datadog"}, `{"data":[],"meta":{"status":"done"}}`, "usage not sent: the input held no requests"},
+		"csv header only":      {[]string{"--source", "generic"}, "caller,method,path,lastSeen\n", "usage not sent: the input held no requests"},
+		"no buckets in file":   {[]string{"--source", "datadog", "--input", writeInput(t, `{"data":[]}`)}, "", "usage not sent: the input held no requests"},
+		"blank stdin":          {[]string{"--source", "datadog"}, " \n\r\n", "usage not sent: " + noInput},
+		"byte order mark only": {[]string{"--source", "datadog", "--input", writeInput(t, "\xef\xbb\xbf\n")}, "", "usage not sent: the input file is empty"},
+	} {
+		r := run{args: c.args}
+		if c.stdin != "" {
+			r.stdin = strings.NewReader(c.stdin)
+		}
+		if out := b.usageRun(t, r, false); out != "WARNING graphwake: "+c.want {
+			t.Errorf("%s: out = %q, want %q", name, out, c.want)
+		}
 	}
 
 	out := b.usageRun(t, run{args: []string{"--source", "datadog", "--dry-run"},

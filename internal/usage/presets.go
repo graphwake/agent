@@ -163,52 +163,73 @@ func eachJSONValue(br *bufio.Reader, first byte, fn func(raw []byte) bool) (read
 // whose values are then counted on their own. more is false only when the input ended inside the array (one skipped
 // element). err is a read error only.
 func eachArrayElement(in *bufio.Reader, src *pushbackReader, count func(bool), fn func(raw []byte) bool) (more bool, err error) {
-	lines := &newlineTracker{r: in}
-	dec := json.NewDecoder(lines)
-	if _, err := dec.Token(); err != nil { // the '[' the caller saw
+	s := newJSONStream(in)
+	if _, err := s.Token(); err != nil { // the '[' the caller saw
 		return false, err
 	}
-	goodEnd := dec.InputOffset() // the end of the last token read without error
-	for dec.More() {
+	for s.More() {
 		var raw json.RawMessage
-		if err = dec.Decode(&raw); err != nil {
+		if raw, err = s.Value(); err != nil {
 			break
 		}
 		count(fn(raw))
-		goodEnd = dec.InputOffset()
-		lines.forget(goodEnd)
 	}
 	if err == nil {
-		_, err = dec.Token() // the closing ']'
+		_, err = s.Token() // the closing ']'
 	}
+	switch r, err := s.resync(in, src, err, nil); {
+	case err != nil:
+		return false, err
+	case r == resyncEnded:
+		count(false) // the array is cut short by the end of the input
+		return false, nil
+	case r == resyncDropped:
+		count(false)
+	}
+	return true, nil
+}
+
+// resyncResult says where the input goes on after a decoder's run.
+type resyncResult int
+
+const (
+	resyncDone    resyncResult = iota // the value was read whole: right after it
+	resyncEnded                       // the input ended inside the value: nowhere
+	resyncAtLine                      // a syntax error that is the first thing on its line: at that line
+	resyncDropped                     // a syntax error inside a line: at the next line, the rest of this one dropped
+)
+
+// resync ends a run of s's decoder over in, which ended with err (nil: the value was read whole), and leaves in where
+// the input goes on. The decoder reads ahead: what it has not used (after a syntax error: from the bad token on),
+// then what in still holds, is put back in front of the input, after restart when it is given, so that nothing is
+// lost or read twice. rerr is a read error only.
+func (s *jsonStream) resync(in *bufio.Reader, src *pushbackReader, err error, restart []byte) (r resyncResult, rerr error) {
 	switch {
 	case err == nil:
 	case isReadError(err):
-		return false, err
+		return resyncEnded, err
 	case err == io.EOF || err == io.ErrUnexpectedEOF:
-		count(false) // the array is cut short by the end of the input
-		return false, nil
+		return resyncEnded, nil
 	}
-
-	// The decoder reads ahead: put what it has not used (after a syntax error: from the bad value on), then what in
-	// still holds, back in front of the input, so that nothing is lost or read twice.
-	rest, _ := io.ReadAll(dec.Buffered())
+	rest, _ := io.ReadAll(s.dec.Buffered())
 	lineStart := false
 	if err != nil {
-		// Depending on the Go version, the decoder stops on the bad value itself or before the comma and white space
-		// ahead of it: look through both for the line break that makes the bad value the first thing on its line.
+		// Depending on the Go version, the decoder stops on the bad token itself or before the comma and white space
+		// ahead of it: look through both for the line break that makes the bad token the first thing on its line.
 		gap := len(rest) - len(bytes.TrimLeft(rest, " \t\r\n,"))
-		lineStart = lines.seen(goodEnd, dec.InputOffset()) || bytes.IndexByte(rest[:gap], '\n') >= 0
+		lineStart = s.lines.seen(s.goodEnd, s.dec.InputOffset()) || bytes.IndexByte(rest[:gap], '\n') >= 0
 		rest = rest[gap:]
 	}
 	held, _ := in.Peek(in.Buffered())
-	src.unread(rest, held)
+	src.unread(restart, rest, held)
 	in.Reset(src)
-	if err == nil || lineStart {
-		return true, nil
+	switch {
+	case err == nil:
+		return resyncDone, nil
+	case lineStart:
+		return resyncAtLine, nil
 	}
-	count(false)
-	return true, discardLine(in)
+	return resyncDropped, discardLine(in)
 }
 
 // discardLine reads past the next newline, or to the end of the input, without keeping the line. err is a read
@@ -305,10 +326,15 @@ func (p *pushbackReader) unread(parts ...[]byte) {
 // between them (an answer that a tool appends to a file without a newline is followed directly by the next). For
 // every object it calls fn, which walks the object with s, from its '{' up to and including its '}', and counts what
 // it reads with count. Each object is streamed: fn reads it one part (a row, a bucket) at a time, so the object may be
-// far larger than any part and span any number of lines. A value that does not start with '{' (such as an
-// "[error] ..." line) costs one skipped value and the rest of its line. A syntax error inside an object costs one
-// skipped value and the rest of the line the error is on; when the error is the first thing on its line, nothing of
-// that line is dropped. An object cut short by the end of the input costs one skipped value. err is a read error only.
+// far larger than any part and span any number of lines.
+//
+// A value that does not start with '{' (such as an "[error] ..." line) costs one skipped value and the rest of its
+// line. A syntax error inside an object costs one skipped value for the object and the rest of the line the error is
+// on (nothing of that line when the error is the first thing on it); reading goes on at the next line as if a new
+// value started there, so the rest of a cut pretty-printed object costs one skipped value per line or value that
+// cannot be read on its own. fn may also find a new object inside the one it walks (the one it walks was cut short):
+// it returns a *restartError holding that object, which costs one skipped value and is then read as the next object.
+// An object cut short by the end of the input costs one skipped value. err is a read error only.
 func eachJSONObject(br *bufio.Reader, first byte, fn func(s *jsonStream, count func(ok bool)) error) (read, skipped int64, err error) {
 	count := func(ok bool) {
 		if ok {
@@ -335,48 +361,44 @@ func eachJSONObject(br *bufio.Reader, first byte, fn func(s *jsonStream, count f
 	}
 }
 
-// streamObject runs fn over the object that starts at in's next byte; afterwards in goes on right after the object,
-// or after a syntax error where eachJSONObject says. more is false only when the input ended inside the object.
+// restartError is what a walker returns when it finds, where a part of the object it walks belongs, a value that is
+// the start of a new top-level object: the object it walks was cut short, and raw (read whole) is the new one.
+type restartError struct{ raw []byte }
+
+func (e *restartError) Error() string { return "a new object starts inside the one being read" }
+
+// streamObject runs fn over the object that starts at in's next byte; afterwards in goes on where eachJSONObject
+// says. more is false only when the input ended inside the object.
 func streamObject(in *bufio.Reader, src *pushbackReader, count func(bool), fn func(*jsonStream, func(bool)) error) (more bool, err error) {
-	s := &jsonStream{lines: &newlineTracker{r: in}}
-	s.dec = json.NewDecoder(s.lines)
+	s := newJSONStream(in)
 	err = fn(s, count)
-	switch {
-	case err == nil:
-	case isReadError(err):
+	var restart []byte
+	if re, ok := err.(*restartError); ok {
+		restart, err = re.raw, nil
+	}
+	r, err := s.resync(in, src, err, restart)
+	if err != nil {
 		return false, err
-	case err == io.EOF || err == io.ErrUnexpectedEOF:
-		count(false) // the object is cut short by the end of the input
-		return false, nil
-	default:
+	}
+	if r != resyncDone || restart != nil {
 		count(false)
 	}
-
-	// The decoder reads ahead: put what it has not used (after a syntax error: from the bad token on), then what in
-	// still holds, back in front of the input. As in eachArrayElement, the line break that makes the bad token the
-	// first thing on its line may lie in what the decoder passed or in what it left.
-	rest, _ := io.ReadAll(s.dec.Buffered())
-	lineStart := false
-	if err != nil {
-		gap := len(rest) - len(bytes.TrimLeft(rest, " \t\r\n,"))
-		lineStart = s.lines.seen(s.goodEnd, s.dec.InputOffset()) || bytes.IndexByte(rest[:gap], '\n') >= 0
-		rest = rest[gap:]
-	}
-	held, _ := in.Peek(in.Buffered())
-	src.unread(rest, held)
-	in.Reset(src)
-	if err == nil || lineStart {
-		return true, nil
-	}
-	return true, discardLine(in)
+	return r != resyncEnded, nil
 }
 
-// jsonStream walks one JSON object token by token. It remembers where the last good token ended, so that after a
-// syntax error eachJSONObject can tell whether the bad token starts its line.
+// jsonStream walks one JSON value token by token. It remembers where the last good token ended, so that after a
+// syntax error resync can tell whether the bad token starts its line.
 type jsonStream struct {
 	dec     *json.Decoder
 	lines   *newlineTracker
 	goodEnd int64
+}
+
+// newJSONStream starts a stream at in's next byte.
+func newJSONStream(in io.Reader) *jsonStream {
+	s := &jsonStream{lines: &newlineTracker{r: in}}
+	s.dec = json.NewDecoder(s.lines)
+	return s
 }
 
 // Token reads the next token.

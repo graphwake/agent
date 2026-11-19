@@ -139,3 +139,33 @@ func TestAppInsights_calls_as_number_and_as_string(t *testing.T) {
 		t.Errorf("bad counts: records = %v, skipped = %d, err = %v", got, skipped, err)
 	}
 }
+
+// The API reports a partial result (such as a truncated answer) with an "error" member beside "tables": its rows are
+// still read, and the result is Partial. Nothing of the error is kept.
+func TestAppInsights_error_member_sets_partial(t *testing.T) {
+	row := `["checkout-web","orders.internal","GET","/x",1,"2026-11-18T09:12:44Z"]`
+	withError := func(errValue string) string {
+		return strings.Replace(aiTable(row), `{"tables":`, `{"error":`+errValue+`,"tables":`, 1)
+	}
+	cases := []struct {
+		name, input string
+		records     int
+		partial     bool
+	}{
+		{"no error", aiTable(row), 1, false},
+		{"error before tables", withError(`{"code":"PartialError","message":"` + marker + `","details":[{"code":"x"}]}`), 1, true},
+		{"error after tables", strings.TrimSuffix(aiTable(row), "}") + `,"error":{"code":"PartialError"}}`, 1, true},
+		{"error is a string", withError(`"` + marker + `"`), 1, true},
+		{"error is null", withError("null"), 1, false},
+		{"only an error", `{"error":{"code":"BadArgumentError"}}`, 0, true},
+	}
+	for _, c := range cases {
+		got, res, err := parseResult(t, "appinsights", c.input, ParseOptions{})
+		if len(got) != c.records || res.Partial != c.partial || c.records > 0 && (err != nil || res.Skipped != 0) {
+			t.Errorf("%s: records = %v, result = %+v, err = %v; want %d records, partial %v", c.name, got, res, err, c.records, c.partial)
+		}
+		if err != nil && strings.Contains(err.Error(), marker) {
+			t.Errorf("%s: error echoes the input: %v", c.name, err)
+		}
+	}
+}

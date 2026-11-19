@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -245,7 +246,8 @@ func buildSummary(ctx context.Context, r *report.Reporter, cfg usageConfig, pres
 
 	agg := usage.NewAggregator(matcher, cfg.NoCounts)
 	var records int64
-	parsed, err := preset.Parse(in, usage.ParseOptions{CallerField: cfg.CallerField}, func(rec usage.Record) {
+	content := &contentReader{r: in}
+	parsed, err := preset.Parse(content, usage.ParseOptions{CallerField: cfg.CallerField}, func(rec usage.Record) {
 		records++
 		s.requests = usage.AddCount(s.requests, max(rec.Count, 1))
 		agg.Add(rec)
@@ -260,7 +262,9 @@ func buildSummary(ctx context.Context, r *report.Reporter, cfg usageConfig, pres
 		return s, false
 	}
 	if records == 0 && s.skipped == 0 {
-		if cfg.Input != "" {
+		if content.seen {
+			r.Warn("usage not sent: the input held no requests")
+		} else if cfg.Input != "" {
 			r.Warn("usage not sent: the input file is empty")
 		} else {
 			r.Warn("usage not sent: %s", noInput)
@@ -303,6 +307,21 @@ func sendSummary(ctx context.Context, r *report.Reporter, s summary, client *usa
 }
 
 const noInput = "no input (give --input or pipe a file)"
+
+// contentReader passes reads through and notes whether anything but white space and a byte order mark went by: an
+// input with content that held no requests is told from an empty one.
+type contentReader struct {
+	r    io.Reader
+	seen bool
+}
+
+func (c *contentReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	if !c.seen && len(bytes.Trim(p[:n], " \t\r\n\xef\xbb\xbf")) > 0 {
+		c.seen = true
+	}
+	return n, err
+}
 
 // partialReason is why an export counts as incomplete; a fixed sentence, never input data.
 const partialReason = "the tool reported a timeout or a warning"
