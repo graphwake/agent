@@ -74,9 +74,13 @@ func TestClient_send_success_line(t *testing.T) {
 	for _, tt := range tests {
 		srv, _ := answer(t, 200, tt.body)
 		res := testClient(srv.URL).Send(context.Background(), []byte(`{}`))
-		if !res.OK || res.Info != tt.want || res.Warning != "" {
+		if !res.OK || res.Info != tt.want || res.Warning != "" || res.SkippedRows != 0 {
 			t.Errorf("Send(%s) = %+v, want %q", tt.body, res, tt.want)
 		}
+	}
+	srv, _ := answer(t, 200, `{"callers":1,"rows":2,"skippedRows":3}`)
+	if res := testClient(srv.URL).Send(context.Background(), []byte(`{}`)); res.SkippedRows != 3 {
+		t.Errorf("SkippedRows = %d, want 3", res.SkippedRows)
 	}
 }
 

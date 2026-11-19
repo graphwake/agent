@@ -317,3 +317,73 @@ func TestUsage_help(t *testing.T) {
 		t.Fatalf("out =\n%s", out)
 	}
 }
+
+// The spec upload still declares its JSON body after the retry loop moved into ingest.Client.Do.
+func TestUpload_still_sends_json_content_type(t *testing.T) {
+	b := newBackend(t)
+	b.run(t, run{args: []string{"--live"}})
+	if len(b.contentTypes) != 1 || b.contentTypes[0] != "application/json" {
+		t.Fatalf("content types %v", b.contentTypes)
+	}
+}
+
+func TestUsage_success_line_plurals_and_rows_not_accepted(t *testing.T) {
+	b := newBackend(t)
+	b.usageBody = `{"callers":1,"newCallers":0,"rows":1,"skippedRows":1,"suggestions":0,"subscriptionsAdded":0}`
+	input := "caller,service,method,path,lastSeen\napp,orders,GET,/v1/orders/1,2026-11-18\nbroken\napp,orders,GET\n"
+	out := b.usageRun(t, run{args: []string{"--source", "generic", "--input", writeInput(t, input)}}, false)
+	want := "graphwake: usage sent: 1 caller, 1 endpoint row (0 new callers, 0 suggestions, 0 subscriptions added). " +
+		"2 lines could not be read. 1 row was not accepted."
+	if out != want {
+		t.Fatalf("out = %q\nwant  %q", out, want)
+	}
+	b.usageBody = `{"callers":2,"newCallers":1,"rows":3,"skippedRows":4,"suggestions":2,"subscriptionsAdded":0}`
+	out = b.usageRun(t, run{args: []string{"--source", "generic", "--input", writeInput(t, usageCSV)}}, false)
+	if out != usageSentLine+" 4 rows were not accepted." {
+		t.Fatalf("out = %q", out)
+	}
+}
+
+// --service pins records that name no service and have no known host; --caller-field picks another column.
+func TestUsage_service_and_caller_field(t *testing.T) {
+	b := newBackend(t)
+	input := "app,method,path,lastSeen\ncheckout-web,GET,/v1/orders/9,2026-11-18\nbilling-worker,GET,/orders,2026-11-17\n"
+	out := b.usageRun(t, run{args: []string{"--source", "generic", "--input", writeInput(t, input),
+		"--service", "orders", "--caller-field", "app"}}, false)
+	if out != "graphwake: usage sent: 2 callers, 3 endpoint rows (1 new caller, 2 suggestions, 0 subscriptions added)." ||
+		len(b.usagePosts) != 1 {
+		t.Fatalf("out = %q, %d posts", out, len(b.usagePosts))
+	}
+	var snap usage.Snapshot
+	if err := json.Unmarshal(b.usagePosts[0].Body, &snap); err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Rows) != 2 || snap.Rows[0].Caller != "billing-worker" || snap.Rows[0].EndpointID != "ep-list" ||
+		snap.Rows[1].Caller != "checkout-web" || snap.Rows[1].EndpointID != "ep-get" || snap.Rows[1].Service != "orders" {
+		t.Fatalf("rows %+v", snap.Rows)
+	}
+	// Without --service nothing in that input names a service: nothing matches.
+	out = b.usageRun(t, run{args: []string{"--source", "generic", "--input", writeInput(t, input), "--caller-field", "app"}}, false)
+	if out != "WARNING graphwake: usage not sent: nothing in the input matched an endpoint" {
+		t.Fatalf("out = %q", out)
+	}
+}
+
+// Raw paths with line breaks and escapes reach only the local table, escaped: no output line starts a CI command.
+// (A "#" in a path starts the fragment, which the preset drops; "##vso[" in a host is covered in the usage package.)
+func TestUsage_dry_run_output_is_escaped(t *testing.T) {
+	b := newBackend(t)
+	input := `{"caller":"app","method":"GET","path":"/x\n::error::y/z\r\u001b[31mw","lastSeen":"2026-11-18"}` + "\n"
+	out := b.usageRun(t, run{args: []string{"--source", "generic", "--dry-run"}, stdin: strings.NewReader(input)}, true)
+	if strings.ContainsAny(out, "\r\x1b") || !strings.Contains(out, `(no host) /x\x0a::error::y/z\x0d\x1b[31mw  1`) {
+		t.Fatalf("out = %q", out)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "::") || strings.Contains(line, "##") {
+			t.Fatalf("line can start a CI command: %q", line)
+		}
+	}
+	if len(b.usagePosts) != 0 {
+		t.Fatalf("%d posts", len(b.usagePosts))
+	}
+}

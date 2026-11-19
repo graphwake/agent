@@ -3,6 +3,7 @@ package usage
 import (
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -169,5 +170,39 @@ func TestAggregate_default_caller_limit(t *testing.T) {
 	var tooMany *TooManyCallersError
 	if !errors.As(err, &tooMany) || tooMany.Callers != 2001 || tooMany.Limit != 2000 {
 		t.Errorf("2001 callers with the default limit: err = %v, want Callers 2001, Limit 2000", err)
+	}
+}
+
+// Counts saturate at the largest int64: two huge pre-aggregated rows never wrap to a negative count.
+func TestAggregate_counts_saturate(t *testing.T) {
+	a := NewAggregator(mustMatcher(t, shop(), ""), false)
+	for i := 0; i < 2; i++ {
+		for _, r := range []Record{
+			{Caller: "checkout-web", Method: "GET", Host: "orders.internal", Path: "/v1/orders/1"},
+			{Caller: "", Method: "GET", Host: "orders.internal", Path: "/v1/orders/1"},
+			{Caller: "jane@contoso.com", Method: "GET", Host: "orders.internal", Path: "/v1/orders/1"},
+			{Caller: "checkout-web", Method: "GET", Host: "orders.internal", Path: "/nope/x"},
+		} {
+			r.Count, r.Day = math.MaxInt64, "2026-11-18"
+			a.Add(r)
+		}
+	}
+	s, err := a.Snapshot("generic", "1.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Rows) != 1 || countOf(s.Rows[0]) != math.MaxInt64 || s.AnonymousRequests != math.MaxInt64 ||
+		s.WithheldRequests != math.MaxInt64 || s.UnmatchedRequests != math.MaxInt64 {
+		t.Fatalf("snapshot %+v (row count %d)", s, countOf(s.Rows[0]))
+	}
+	if u := a.UnmatchedByPrefix(); len(u) != 1 || u[0].Count != math.MaxInt64 {
+		t.Fatalf("unmatched %+v", u)
+	}
+	body, err := Encode(s)
+	if err != nil || !strings.Contains(string(body), `"count":9223372036854775807`) {
+		t.Fatalf("body %s, %v", body, err)
+	}
+	if AddCount(math.MaxInt64-1, 1) != math.MaxInt64 || AddCount(2, 3) != 5 || AddCount(0, 0) != 0 {
+		t.Fatal("AddCount")
 	}
 }

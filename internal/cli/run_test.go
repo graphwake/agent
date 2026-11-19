@@ -52,6 +52,9 @@ type backend struct {
 	ghPulls  string // "" → 500
 	ghCalls  int
 
+	// contentTypes are the Content-Type headers of the spec uploads.
+	contentTypes []string
+
 	ghLabels         string        // labels API answer; "" → []
 	ghLabelsDelay    time.Duration // the labels API answers this late
 	ghCommentsStatus int           // non-zero: every comments call answers this status
@@ -118,6 +121,7 @@ func newBackend(t *testing.T) *backend {
 			}
 			b.requests = append(b.requests, m)
 			b.auth = append(b.auth, r.Header.Get("Authorization"))
+			b.contentTypes = append(b.contentTypes, r.Header.Get("Content-Type"))
 			w.WriteHeader(b.status)
 			io.WriteString(w, b.body)
 		case r.URL.Path == "/api/ingest/usage/templates" && r.Method == http.MethodGet:

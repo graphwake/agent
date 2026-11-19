@@ -37,6 +37,8 @@ type Result struct {
 	Status  int // 0 when no answer was received
 	Warning string
 	Info    string
+	// SkippedRows is the number of rows the server did not accept (Send only).
+	SkippedRows int64
 }
 
 // Templates fetches the endpoint templates, limits and mappings of the key's usage source.
@@ -70,6 +72,7 @@ func (c *Client) Send(ctx context.Context, body []byte) Result {
 		res.Info = "usage sent."
 		return res
 	}
+	res.SkippedRows = max(int64(a.SkippedRows), 0)
 	res.Info = fmt.Sprintf("usage sent: %s, %s (%s, %s, %s added).",
 		Plural(int64(a.Callers), "caller", "callers"), Plural(int64(a.Rows), "endpoint row", "endpoint rows"),
 		Plural(int64(a.NewCallers), "new caller", "new callers"), Plural(int64(a.Suggestions), "suggestion", "suggestions"),

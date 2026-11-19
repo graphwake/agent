@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"os"
 	"regexp"
@@ -148,8 +149,11 @@ func usageQuery(args []string, d Deps) int {
 	return 0
 }
 
-// usageSend reads the input, matches it to the endpoint templates and sends the summary (or, with --dry-run, prints
-// it). Whatever happens it prints one line and returns 0; --dry-run prints the summary instead.
+// usageSend reads the input, matches it to the endpoint templates and sends the summary, or with --dry-run prints
+// it. Whatever happens it prints one line (the dry run: the summary) and returns 0.
+//
+// The dry run cannot send by construction: building the summary sees Graphwake only through templateSource, and
+// the client that can send is created in the send branch alone. cfg.DryRun is read here and nowhere else.
 func usageSend(args []string, d Deps) int {
 	r, cfg, platform, ok := usageStart(args, d)
 	if !ok {
@@ -176,11 +180,38 @@ func usageSend(args []string, d Deps) int {
 	defer closeInput()
 
 	ctx := context.Background()
+	s, ok := buildSummary(ctx, r, cfg, preset, in, d.Version, newUsageClient(cfg, d, platform))
+	if !ok {
+		return 0
+	}
+	if cfg.DryRun {
+		usage.RenderDryRun(d.Out, s.body, s.unmatched, s.snap.WithheldRequests, s.snap.AnonymousRequests)
+		return 0
+	}
+	sendSummary(ctx, r, s, newUsageClient(cfg, d, platform))
+	return 0
+}
+
+// templateSource is all that building a summary needs from Graphwake: it can fetch the templates and nothing else.
+type templateSource interface {
+	Templates(ctx context.Context) (usage.Templates, usage.Result)
+}
+
+// summary is a built and encoded usage summary with what stays on this machine.
+type summary struct {
+	snap      usage.Snapshot
+	body      []byte // the encoded snap, exactly as it is sent
+	unmatched []usage.PrefixCount
+	requests  int64 // every request read, saturating
+	skipped   int64 // lines or elements the preset could not read
+}
+
+func newUsageClient(cfg usageConfig, d Deps, platform ci.Platform) *usage.Client {
 	sleep := d.Sleep
 	if sleep == nil {
 		sleep = spec.SleepContext
 	}
-	client := usage.Client{
+	return &usage.Client{
 		BaseURL:   cfg.URL,
 		Key:       cfg.Key,
 		UserAgent: "graphwake-agent/" + d.Version + " (" + string(platform) + ")",
@@ -190,70 +221,76 @@ func usageSend(args []string, d Deps) int {
 			return ctx.Err()
 		},
 	}
-	templates, res := client.Templates(ctx)
+}
+
+// buildSummary fetches the templates, reads the input into an aggregate and encodes the snapshot. ok is false when
+// the run is over (the reason was reported).
+func buildSummary(ctx context.Context, r *report.Reporter, cfg usageConfig, preset usage.Preset, in io.Reader,
+	version string, graphwake templateSource) (s summary, ok bool) {
+	templates, res := graphwake.Templates(ctx)
 	if !res.OK {
 		r.Warn("%s", res.Warning)
-		return 0
+		return s, false
 	}
 	matcher, err := usage.NewMatcher(templates, cfg.Service)
 	if err != nil {
 		// The error names the service; it is not repeated.
 		r.Warn("usage not sent: --service names no service in the endpoint list Graphwake sent")
-		return 0
+		return s, false
 	}
 
 	agg := usage.NewAggregator(matcher, cfg.NoCounts)
-	var records, requests int64
-	skipped, err := preset.Parse(in, usage.ParseOptions{CallerField: cfg.CallerField}, func(rec usage.Record) {
+	var records int64
+	s.skipped, err = preset.Parse(in, usage.ParseOptions{CallerField: cfg.CallerField}, func(rec usage.Record) {
 		records++
-		requests += max(rec.Count, 1)
+		s.requests = usage.AddCount(s.requests, max(rec.Count, 1))
 		agg.Add(rec)
 	})
 	if err != nil {
 		r.Warn("usage not sent: the input could not be read")
-		return 0
+		return s, false
 	}
-	if records == 0 && skipped == 0 {
+	if records == 0 && s.skipped == 0 {
 		if cfg.Input != "" {
 			r.Warn("usage not sent: the input file is empty")
 		} else {
 			r.Warn("usage not sent: %s", noInput)
 		}
-		return 0
+		return s, false
 	}
 
-	snap, err := agg.Snapshot(preset.Name, d.Version)
+	s.snap, err = agg.Snapshot(preset.Name, version)
 	var tooMany *usage.TooManyCallersError
 	if errors.As(err, &tooMany) {
 		r.Warn("usage not sent: too many distinct callers (%d, limit %d). The caller field may identify end users; "+
 			"choose another with --caller-field", tooMany.Callers, tooMany.Limit)
-		return 0
+		return s, false
 	}
 	if err != nil {
 		r.Warn("usage not sent: the summary could not be built")
-		return 0
+		return s, false
 	}
-	if !cfg.DryRun && len(snap.Rows) == 0 {
-		r.Warn("usage not sent: %s", emptySummary(snap, requests))
-		return 0
-	}
-	body, err := usage.Encode(snap)
-	if err != nil {
+	if s.body, err = usage.Encode(s.snap); err != nil {
 		r.Warn("usage not sent: the summary is too large")
-		return 0
+		return s, false
 	}
-	if cfg.DryRun {
-		usage.RenderDryRun(d.Out, body, agg.UnmatchedByPrefix(), snap.WithheldRequests, snap.AnonymousRequests)
-		return 0
-	}
+	s.unmatched = agg.UnmatchedByPrefix()
+	return s, true
+}
 
-	res = client.Send(ctx, body)
+// sendSummary sends a summary that has rows and prints the outcome. A summary without rows is not sent; the
+// warning says why.
+func sendSummary(ctx context.Context, r *report.Reporter, s summary, client *usage.Client) {
+	if len(s.snap.Rows) == 0 {
+		r.Warn("usage not sent: %s", emptySummary(s.snap, s.requests))
+		return
+	}
+	res := client.Send(ctx, s.body)
 	if !res.OK {
 		r.Warn("%s", res.Warning)
-		return 0
+		return
 	}
-	r.Info("%s", res.Info+usageNotes(snap, skipped))
-	return 0
+	r.Info("%s", res.Info+usageNotes(s.snap, s.skipped, res.SkippedRows))
 }
 
 const noInput = "no input (give --input or pipe a file)"
@@ -292,9 +329,9 @@ func emptySummary(snap usage.Snapshot, requests int64) string {
 	return "nothing in the input matched an endpoint"
 }
 
-// usageNotes are the sentences after the success line: what was counted but not sent, and the lines the parser
-// skipped.
-func usageNotes(snap usage.Snapshot, skipped int64) string {
+// usageNotes are the sentences after the success line: what was counted but not sent, the lines the parser
+// skipped and the rows the server did not accept.
+func usageNotes(snap usage.Snapshot, skipped, notAccepted int64) string {
 	var b strings.Builder
 	if n := snap.UnmatchedRequests; n > 0 {
 		b.WriteString(" " + usage.Plural(n, "request", "requests") + " matched no endpoint.")
@@ -309,6 +346,11 @@ func usageNotes(snap usage.Snapshot, skipped int64) string {
 	}
 	if skipped > 0 {
 		b.WriteString(" " + usage.Plural(skipped, "line", "lines") + " could not be read.")
+	}
+	if notAccepted == 1 {
+		b.WriteString(" 1 row was not accepted.")
+	} else if notAccepted > 1 {
+		b.WriteString(fmt.Sprintf(" %d rows were not accepted.", notAccepted))
 	}
 	return b.String()
 }

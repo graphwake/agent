@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"math"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -51,11 +52,11 @@ func (a *Aggregator) Add(r Record) {
 
 	caller := strings.TrimSpace(r.Caller)
 	if caller == "" {
-		a.anonymousRequests += count
+		a.anonymousRequests = AddCount(a.anonymousRequests, count)
 		return
 	}
 	if LooksPersonal(caller) {
-		a.withheldRequests += count
+		a.withheldRequests = AddCount(a.withheldRequests, count)
 		return
 	}
 	if utf8.RuneCountInString(caller) > maxCallerRunes {
@@ -64,8 +65,9 @@ func (a *Aggregator) Add(r Record) {
 
 	e, s, ok := a.m.Match(r)
 	if !ok {
-		a.unmatchedRequests += count
-		a.unmatched[PrefixCount{Host: r.Host, Prefix: pathPrefix(r.Path)}] += count
+		a.unmatchedRequests = AddCount(a.unmatchedRequests, count)
+		key := PrefixCount{Host: r.Host, Prefix: pathPrefix(r.Path)}
+		a.unmatched[key] = AddCount(a.unmatched[key], count)
 		return
 	}
 
@@ -79,7 +81,7 @@ func (a *Aggregator) Add(r Record) {
 		sum = &rowSum{row: Row{Caller: caller, CallerKind: kind, EndpointID: e.ID, Service: s.Name, Method: e.Method, Path: e.Path}}
 		a.rows[key] = sum
 	}
-	sum.count += count
+	sum.count = AddCount(sum.count, count)
 	if r.Day > sum.row.LastSeen {
 		sum.row.LastSeen = r.Day
 	}
@@ -156,4 +158,12 @@ func pathPrefix(p string) string {
 		segs = segs[:2]
 	}
 	return "/" + strings.Join(segs, "/")
+}
+
+// AddCount adds two request counts (both at least zero), stopping at the largest int64 instead of overflowing.
+func AddCount(a, b int64) int64 {
+	if a > math.MaxInt64-b {
+		return math.MaxInt64
+	}
+	return a + b
 }
