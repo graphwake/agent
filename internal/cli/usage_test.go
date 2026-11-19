@@ -715,3 +715,13 @@ func TestUsage_internal_error_is_one_warning_and_exit_zero(t *testing.T) {
 		t.Fatalf("%d posts", len(b.usagePosts))
 	}
 }
+
+// "graphwake usage query" is covered by the same recovery: a bug there is one fixed warning and exit code 0.
+func TestUsage_query_internal_error_is_one_warning_and_exit_zero(t *testing.T) {
+	var out bytes.Buffer
+	d := Deps{Out: &out, Getenv: func(string) string { panic("bug with " + usageKey) }}
+	if code := usageCommand([]string{"query", "--source", "nginx"}, d); code != 0 ||
+		out.String() != "WARNING graphwake: usage not sent: internal error\n" {
+		t.Fatalf("code %d, out %q", code, out.String())
+	}
+}

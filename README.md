@@ -524,8 +524,7 @@ the most of them wins), else the host of a service's server URL, else the servic
 no endpoint adds no row.
 
 **Known limits.** A template with a parameter inside a segment, such as `/files/{id}.json`, `/orders/{id}:cancel`
-or `/v{version}/x`, is not matched yet: requests to it count as matching no endpoint. Matching is case-sensitive,
-the base path of a server URL included.
+or `/v{version}/x`, is not matched yet: requests to it count as matching no endpoint.
 
 ### Supported sources
 
@@ -835,7 +834,8 @@ steps:
 ```
 
 Inside the container the agent sees only the variables passed with `-e`, so its warnings start with
-`WARNING graphwake:`. To pipe the export instead of `--input`, give `docker run` the `-i` flag.
+`WARNING graphwake:`. Piping the export works too (give `docker run` the `-i` flag), but in CI prefer `--input`:
+piped input is read until the pipe is closed.
 
 Setup for each tool (the export step, the query, the schedule):
 https://graphwake.com/guides/find-api-consumers-from-gateway-logs. What the step sends, for security reviews:

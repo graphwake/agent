@@ -289,6 +289,7 @@ func TestPathPrefix_masks_segments(t *testing.T) {
 		"/v1/orders/8812":         "/*/orders",
 		"/users/jane@contoso.com": "/users/*",
 		"/files/a%2Fb":            "/files/*",
+		"/files/a%AFb":            "/files/*", // "%" alone, no digit
 		"/reset-password/eyJhbGciOiJIUzI1NiJ9.SECRETTOKEN": "/reset-password/*",
 		"/abcdefghijklmnopqrstuvwx/y":                      "/abcdefghijklmnopqrstuvwx/y", // 24 characters
 		"/abcdefghijklmnopqrstuvwxy/y":                     "/*/y",                        // 25
