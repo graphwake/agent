@@ -65,27 +65,35 @@ func openInput(r io.Reader) (br *bufio.Reader, first byte, ok bool, err error) {
 	if bom, _ := br.Peek(3); bytes.Equal(bom, []byte("\xef\xbb\xbf")) {
 		_, _ = br.Discard(3)
 	}
+	first, ok, err = skipSpace(br)
+	return br, first, ok, err
+}
+
+// skipSpace reads past white space. first is the next byte, left unread; ok is false at the end of the input.
+func skipSpace(br *bufio.Reader) (first byte, ok bool, err error) {
 	for {
 		b, err := br.ReadByte()
 		if err == io.EOF {
-			return br, 0, false, nil
+			return 0, false, nil
 		}
 		if err != nil {
-			return br, 0, false, err
+			return 0, false, err
 		}
 		switch b {
 		case ' ', '\t', '\r', '\n':
 			continue
 		}
 		_ = br.UnreadByte()
-		return br, b, true, nil
+		return b, true, nil
 	}
 }
 
-// eachJSONValue calls fn for every JSON value of the input: the elements of a top-level array when the input starts
-// with '[', else every non-blank line. fn reports whether it could read the value; read and skipped count the
-// answers. A syntax error inside an array ends the array (the decoder cannot find the next element) and counts as
-// one skipped element. err is a read error only.
+// eachJSONValue calls fn for every JSON value of the input, one top-level value after another until the input
+// ends: a top-level value that starts with '[' gives its elements, anything else gives the non-blank line it starts
+// on. Arrays and lines may follow one another in any number and order (a receiver that appends every http-log batch
+// to one file writes arrays one after another). fn reports whether it could read the value; read and skipped count
+// the answers. A syntax error inside an array ends the input (the decoder cannot find the next element) and counts
+// as one skipped element. err is a read error only.
 func eachJSONValue(br *bufio.Reader, first byte, fn func(raw []byte) bool) (read, skipped int64, err error) {
 	count := func(ok bool) {
 		if ok {
@@ -94,35 +102,96 @@ func eachJSONValue(br *bufio.Reader, first byte, fn func(raw []byte) bool) (read
 			skipped++
 		}
 	}
-	if first != '[' {
-		err := eachLine(br, func(line []byte) bool {
-			count(fn(line))
-			return true
-		})
-		return read, skipped, err
+	src := &pushbackReader{r: br}
+	in := bufio.NewReader(src)
+	for {
+		if first == '[' {
+			more, err := eachArrayElement(in, src, count, fn)
+			if err != nil || !more {
+				return read, skipped, err
+			}
+		} else {
+			line, err := in.ReadBytes('\n')
+			if line = bytes.TrimSpace(line); len(line) > 0 {
+				count(fn(line))
+			}
+			if err == io.EOF {
+				return read, skipped, nil
+			}
+			if err != nil {
+				return read, skipped, err
+			}
+		}
+		var ok bool
+		if first, ok, err = skipSpace(in); err != nil || !ok {
+			return read, skipped, err
+		}
 	}
+}
 
-	dec := json.NewDecoder(br)
-	if _, err := dec.Token(); err != nil { // the '[' openInput saw
-		return 0, 0, err
+// eachArrayElement calls fn for every element of the array that starts at in's next byte and counts the answers.
+// more is true when the array closed, and in then goes on right after its ']'; it is false when a broken or
+// cut-short array ended the input (counted as one skipped element). err is a read error only.
+func eachArrayElement(in *bufio.Reader, src *pushbackReader, count func(bool), fn func(raw []byte) bool) (more bool, err error) {
+	dec := json.NewDecoder(in)
+	if _, err := dec.Token(); err != nil { // the '[' the caller saw
+		return false, err
 	}
 	for dec.More() {
 		var raw json.RawMessage
 		if err := dec.Decode(&raw); err != nil {
 			if isReadError(err) {
-				return read, skipped, err
+				return false, err
 			}
-			return read, skipped + 1, nil
+			count(false)
+			return false, nil
 		}
 		count(fn(raw))
 	}
 	if _, err := dec.Token(); err != nil { // the closing ']'
 		if isReadError(err) {
-			return read, skipped, err
+			return false, err
 		}
-		skipped++ // the array is cut short or broken
+		count(false) // the array is cut short or broken
+		return false, nil
 	}
-	return read, skipped, nil
+	// The decoder reads ahead: put what it has not used, then what in still holds, back in front of the input.
+	rest, err := io.ReadAll(dec.Buffered())
+	if err != nil {
+		return false, err
+	}
+	held, _ := in.Peek(in.Buffered())
+	src.unread(rest, held)
+	in.Reset(src)
+	return true, nil
+}
+
+// pushbackReader reads the bytes put back with unread before those of r.
+type pushbackReader struct {
+	pending []byte
+	r       io.Reader
+}
+
+func (p *pushbackReader) Read(b []byte) (int, error) {
+	if len(p.pending) > 0 {
+		n := copy(b, p.pending)
+		p.pending = p.pending[n:]
+		return n, nil
+	}
+	return p.r.Read(b)
+}
+
+// unread puts the parts back, in order, in front of what is still pending.
+func (p *pushbackReader) unread(parts ...[]byte) {
+	n := len(p.pending)
+	for _, part := range parts {
+		n += len(part)
+	}
+	pending := make([]byte, 0, n)
+	for _, part := range parts {
+		pending = append(pending, part...)
+	}
+	p.pending = append(pending, p.pending...)
 }
 
 // eachLine calls fn for every non-blank line, trimmed, with no limit on the line length, until fn returns false.

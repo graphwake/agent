@@ -2,6 +2,8 @@ package usage
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -127,5 +129,32 @@ func TestKong_never_copies_headers_or_querystring(t *testing.T) {
 	broken := `{"request":{"headers":{"apikey":"` + marker + `"},"uri":"/orders/3?token=` + marker + `"` + "\n"
 	if _, _, err := parse(t, "kong", broken, ParseOptions{}); err == nil || strings.Contains(err.Error(), secret) {
 		t.Errorf("err = %v; want an error without the input", err)
+	}
+}
+
+// A receiver that appends every http-log batch to one file writes arrays one after another: the records of all.
+func TestKong_http_log_batches_appended(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "kong-http-log-batch.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := strings.TrimSpace(string(data))
+	one := parseFixture(t, "kong", "kong-http-log-batch.json", ParseOptions{})
+	line := kongLine(`{"username":"checkout-web"}`, "")
+	lineRecord := Record{Caller: "checkout-web", Kind: "client", Method: "GET", Host: "gateway.example", Path: "/orders/1", Count: 1, Day: "2026-11-18"}
+	cases := []struct {
+		name, input string
+		want        []Record
+	}{
+		{"one after another", batch + batch, append(append([]Record{}, one...), one...)},
+		{"on separate lines", batch + "\n" + batch + "\n", append(append([]Record{}, one...), one...)},
+		{"with file-log lines", line + "\n" + batch + "\n" + line + "\n" + batch, append(append(append([]Record{lineRecord}, one...), lineRecord), one...)},
+	}
+	for _, c := range cases {
+		got, skipped, err := parse(t, "kong", c.input, ParseOptions{})
+		if err != nil || skipped != 0 {
+			t.Fatalf("%s: skipped = %d, err = %v", c.name, skipped, err)
+		}
+		assertRecords(t, got, c.want)
 	}
 }

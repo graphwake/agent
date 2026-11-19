@@ -1,6 +1,11 @@
 package usage
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 func TestApim_log_analytics_output(t *testing.T) {
 	assertRecords(t, parseFixture(t, "apim", "apim-log-analytics.json", ParseOptions{}), []Record{
@@ -33,5 +38,24 @@ func TestApim_caller_field_override(t *testing.T) {
 		if got[i].Caller != want {
 			t.Errorf("row %d caller = %q, want %q", i, got[i].Caller, want)
 		}
+	}
+}
+
+// Two query answers in one file (two arrays): the rows of both.
+func TestApim_several_arrays(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "apim-log-analytics.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	one := parseFixture(t, "apim", "apim-log-analytics.json", ParseOptions{})
+	for name, in := range map[string]string{
+		"one after another": strings.TrimSpace(string(data)) + strings.TrimSpace(string(data)),
+		"on separate lines": string(data) + "\n" + string(data),
+	} {
+		got, skipped, err := parse(t, "apim", in, ParseOptions{})
+		if err != nil || skipped != 0 {
+			t.Fatalf("%s: skipped = %d, err = %v", name, skipped, err)
+		}
+		assertRecords(t, got, append(append([]Record{}, one...), one...))
 	}
 }

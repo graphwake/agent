@@ -13,7 +13,7 @@ import (
 // kongQuery is the Kong plugin configuration that writes the log the kong preset reads.
 const kongQuery = `# Kong: log requests with the file-log plugin, then send the file.
 # Each line is one JSON object; Graphwake reads consumer, request.method, request.uri,
-# request.headers.host and started_at, and nothing else.
+# request.headers.host (or the host in request.url) and started_at, and nothing else.
 plugins:
   - name: file-log
     config:

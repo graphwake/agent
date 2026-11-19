@@ -94,7 +94,7 @@ service:
 `
 	kong := `# Kong: log requests with the file-log plugin, then send the file.
 # Each line is one JSON object; Graphwake reads consumer, request.method, request.uri,
-# request.headers.host and started_at, and nothing else.
+# request.headers.host (or the host in request.url) and started_at, and nothing else.
 plugins:
   - name: file-log
     config:
@@ -334,5 +334,66 @@ func TestParsers_stream_large_input(t *testing.T) {
 				t.Errorf("records = %d, skipped = %d, err = %v; want %d, 0, nil", n, skipped, err, total)
 			}
 		})
+	}
+}
+
+// eachJSONValue reads every top-level value of the input: arrays one after another, with or without line breaks
+// between them, and arrays and lines mixed.
+func TestEachJSONValue_every_top_level_value(t *testing.T) {
+	cases := []struct {
+		name, input   string
+		want          []string // the values fn saw, in order
+		read, skipped int64
+	}{
+		{"arrays one after another", `[{"n":1},{"n":2}][{"n":3}]`, []string{`{"n":1}`, `{"n":2}`, `{"n":3}`}, 3, 0},
+		{"arrays on separate lines", "[{\"n\":1}]\n\n[\n  {\"n\":2}\n]\n", []string{`{"n":1}`, `{"n":2}`}, 2, 0},
+		{"lines and arrays mixed", "{\"n\":1}\n[{\"n\":2},{\"n\":3}]\n{\"n\":4}\n[]\n{\"n\":5}", []string{`{"n":1}`, `{"n":2}`, `{"n":3}`, `{"n":4}`, `{"n":5}`}, 5, 0},
+		{"a line right after an array", "[{\"n\":1}] {\"n\":2}\n{\"n\":3}", []string{`{"n":1}`, `{"n":2}`, `{"n":3}`}, 3, 0},
+		{"a bad element in a later array ends the input", "[{\"n\":1}]\n[{\"n\":2}, oops\n{\"n\":3}\n", []string{`{"n":1}`, `{"n":2}`}, 2, 1},
+		{"a later array cut short", "[{\"n\":1}]\n[{\"n\":2}", []string{`{"n":1}`, `{"n":2}`}, 2, 1},
+		{"a bad line between arrays", "[{\"n\":1}]\nnot json\n[{\"n\":2}]", []string{`{"n":1}`, "not json", `{"n":2}`}, 2, 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			br, first, ok, err := openInput(strings.NewReader(c.input))
+			if err != nil || !ok {
+				t.Fatalf("openInput: ok = %v, err = %v", ok, err)
+			}
+			var got []string
+			read, skipped, err := eachJSONValue(br, first, func(raw []byte) bool {
+				got = append(got, string(raw))
+				return raw[0] == '{'
+			})
+			if err != nil || read != c.read || skipped != c.skipped || !reflect.DeepEqual(got, c.want) {
+				t.Errorf("values = %q, read = %d, skipped = %d, err = %v; want %q, %d, %d", got, read, skipped, err, c.want, c.read, c.skipped)
+			}
+		})
+	}
+
+	// Many arrays, each larger than the read buffers, separated in every way: every element, in order.
+	var b strings.Builder
+	n := 0
+	for a := 0; a < 60; a++ {
+		b.WriteString("[")
+		for e := 0; e < 300; e++ {
+			if e > 0 {
+				b.WriteString(",")
+			}
+			fmt.Fprintf(&b, `{"n":%d,"pad":"%s"}`, n, strings.Repeat("x", a%7*10))
+			n++
+		}
+		b.WriteString([]string{"]", "]\n", "]\r\n\n", "] "}[a%4])
+	}
+	br, first, _, _ := openInput(strings.NewReader(b.String()))
+	next := 0
+	read, skipped, err := eachJSONValue(br, first, func(raw []byte) bool {
+		if want := fmt.Sprintf(`{"n":%d,`, next); !strings.HasPrefix(string(raw), want) {
+			t.Fatalf("element %d = %.40s", next, raw)
+		}
+		next++
+		return true
+	})
+	if err != nil || read != int64(n) || skipped != 0 {
+		t.Errorf("read = %d, skipped = %d, err = %v; want %d, 0, nil", read, skipped, err, n)
 	}
 }
