@@ -286,7 +286,11 @@ var withheldProbes = []string{
 	"/v1/orders/8812?token=abc", // starts with "/"
 	"https://orders.example/a",  // contains "://"
 	"orders?page=2",             // contains "?"
+	"GET /v1/orders/8812",       // a word that starts with "/"
 }
+
+// notWithheldExamples are the names the README's list shows as not withheld; the guard must agree.
+var notWithheldExamples = []string{"550e8400-e29b-41d4-a716-446655440000", "team/app", "Checkout / Web"}
 
 func TestReadme_withheld_name_list_has_every_rule(t *testing.T) {
 	section := readmeSection(t, readFileT(t, readmePath), "### What the usage step sends")
@@ -307,17 +311,21 @@ func TestReadme_withheld_name_list_has_every_rule(t *testing.T) {
 			t.Errorf("the README's withheld-name list has no example %q", probe)
 		}
 	}
-	// Every full example in the list is withheld (the list also quotes characters, such as "+/_=-", that are not).
+	for _, name := range notWithheldExamples {
+		if usage.LooksPersonal(name) {
+			t.Errorf("%q is withheld by the guard, but the README's list shows it as not withheld", name)
+		}
+		if !contains(spans, name) {
+			t.Errorf("the README's withheld-name list has no not-withheld example %q", name)
+		}
+	}
+	// Every other full example in the list is withheld (the list also quotes characters, such as "+/_=-", and the
+	// field withheldRequests, which are not names).
 	for _, span := range spans {
-		if len(span) > 8 && !strings.HasPrefix(span, "withheld") && !usage.LooksPersonal(span) && !uuidLike(span) {
+		if len(span) > 8 && span != "withheldRequests" && !contains(notWithheldExamples, span) && !usage.LooksPersonal(span) {
 			t.Errorf("the README's withheld-name list shows %q, which the guard does not withhold", span)
 		}
 	}
-}
-
-// uuidLike tells the canonical UUID the README names as not withheld.
-func uuidLike(s string) bool {
-	return regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`).MatchString(s)
 }
 
 var (

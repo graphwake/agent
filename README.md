@@ -502,9 +502,10 @@ graphwake upload --spec http://localhost:5000/swagger/v1/swagger.json
 
 `graphwake usage` reads a gateway log or trace export and sends Graphwake a summary: which caller used which
 endpoint, how many times and on which day last. It reads one file or standard input, runs wherever you run it (a
-scheduled CI job or any scheduler) and connects to nothing but Graphwake. The summary carries endpoint templates
-from Graphwake's list, never a request's own path or query string, and caller names that look personal or look like
-a path or a URL are withheld; `--dry-run` prints the summary it would send, and says so when nothing would be sent.
+scheduled CI job or any scheduler) and connects to nothing but Graphwake. The summary holds the caller name, the
+endpoint as a path template, the call count and the last-seen day; request and response bodies, query strings and IP
+addresses are never part of it. `--dry-run` prints the summary it would send, and says so when nothing would be
+sent.
 
 Optional. Without it, Graphwake still needs only your spec.
 
@@ -630,8 +631,10 @@ path prefix (printed by `--dry-run` only), and the content of lines that could n
   `apikey=0123456789abcdef0123456789abcdef`;
 - it contains a control character (a newline, a carriage return, a tab, ESC);
 - it contains the sequence `##`, as in `x ##y`;
-- it looks like a path or a URL: without surrounding spaces it starts with `/`, or it contains `://` or `?`:
-  `/v1/orders/8812?token=abc`, `https://orders.example/a`, `orders?page=2` (`team/app` is not withheld).
+- it looks like a path or a URL: without surrounding spaces it starts with `/`, or it contains `://` or `?`, or
+  one of its words (separated by white space) starts with `/` and is longer than one character:
+  `/v1/orders/8812?token=abc`, `https://orders.example/a`, `orders?page=2`, `GET /v1/orders/8812` (`team/app` and
+  `Checkout / Web` are not withheld).
 
 **Limits.** With more distinct callers (caller name and kind pairs) than the caller limit (2,000, unless the
 endpoint list Graphwake sends sets another), nothing is sent: so many names usually mean the caller field names end
@@ -674,7 +677,7 @@ configuration). The usage key is never printed. Warnings use the CI's warning fo
 | Line | Meaning |
 |---|---|
 | `graphwake: usage sent: 2 callers, 3 endpoint rows (1 new caller, 2 suggestions, 0 subscriptions added).` | Sent. The numbers are Graphwake's answer. |
-| `graphwake: usage sent.` | Sent; Graphwake's answer was not JSON. |
+| `graphwake: usage sent.` | Sent; Graphwake's answer could not be read as the expected JSON. |
 | `... 5 requests matched no endpoint.` | Added to the sent line: counted, not sent by name. |
 | `... 7 requests had no caller name.` | Added to the sent line. |
 | `... 3 requests were withheld because the caller name looked personal.` | Added to the sent line. |
@@ -699,7 +702,7 @@ configuration). The usage key is never printed. Warnings use the CI's warning fo
 | warning `usage not sent: the summary is too large` | Over the row limit or 10 MB (the agent's check or Graphwake's). |
 | warning `usage not sent: the summary could not be built` | An internal problem building the summary. |
 | warning `usage not sent: no caller names were found in the input. Check --caller-field` | No request had a caller name. |
-| warning `usage not sent: no caller name could be sent: every name looked personal (an e-mail address, an IP address or a token) or was missing. Check --caller-field` | Every request was withheld or had no caller name. |
+| warning `usage not sent: no caller name could be sent: every name was withheld (it looked like an e-mail address, an IP address, a secret, a path or a URL) or was missing. Check --caller-field` | Every request was withheld or had no caller name. |
 | warning `usage not sent: nothing in the input matched an endpoint` | Check the mappings, the server URLs or `--service`; `--dry-run` shows the unmatched hosts and paths. |
 | warning `usage not sent: Graphwake's endpoint list could not be read` | The endpoint list answer was not valid. |
 | warning `usage not sent: the key was not accepted` | HTTP 401: check `GRAPHWAKE_USAGE_KEY`. |

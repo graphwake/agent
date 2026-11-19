@@ -235,7 +235,7 @@ func TestUsage_every_failure_exits_zero(t *testing.T) {
 			want: "usage not sent: Graphwake could not be reached"},
 		{name: "nothing matched", templates: `{"services":[]}`, want: "usage not sent: nothing in the input matched an endpoint"},
 		{name: "all withheld", input: "caller,service,method,path,lastSeen\njane@contoso.com,orders,GET,/v1/orders/1,2026-11-18\n",
-			want: "usage not sent: no caller name could be sent: every name looked personal (an e-mail address, an IP address or a token) or was missing. Check --caller-field"},
+			want: "usage not sent: no caller name could be sent: every name was withheld (it looked like an e-mail address, an IP address, a secret, a path or a URL) or was missing. Check --caller-field"},
 		{name: "too many rows", templates: strings.Replace(usageTemplates, `"maxRows":50000`, `"maxRows":1`, 1),
 			want: "usage not sent: the summary is too large"},
 		{name: "all anonymous", input: "caller,service,method,path,lastSeen\n,orders,GET,/v1/orders/1,2026-11-18\n",
@@ -544,6 +544,28 @@ func TestUsage_dry_run_says_when_nothing_would_be_sent(t *testing.T) {
 	out = b.usageRun(t, run{args: []string{"--source", "generic", "--input", writeInput(t, usageCSV), "--dry-run"}}, true)
 	if strings.Contains(out, "Note:") {
 		t.Fatalf("summary with rows: out =\n%s", out)
+	}
+	if len(b.usagePosts) != 0 {
+		t.Fatalf("%d posts", len(b.usagePosts))
+	}
+}
+
+// A caller field that names a method-prefixed path (Datadog's resource_name, "GET /v1/orders/8812") is withheld:
+// neither the path nor its id reaches the summary or the output.
+func TestUsage_method_prefixed_path_as_caller_is_withheld(t *testing.T) {
+	b := newBackend(t)
+	input := `{"data":[{"type":"bucket","attributes":{"by":{"service":"checkout-web","resource_name":"GET /v1/orders/8812",` +
+		`"@http.url_details.host":"orders.internal","@http.url_details.path":"/v1/orders/8812","@http.method":"GET"},` +
+		`"compute":{"c0":42}}}],"meta":{"status":"done"}}`
+	out := b.usageRun(t, run{args: []string{"--source", "datadog", "--caller-field", "resource_name", "--dry-run"},
+		stdin: strings.NewReader(input)}, true)
+	if !strings.Contains(out, `"withheldRequests":42`) || !strings.Contains(out, `"rows":[]`) {
+		t.Fatalf("out =\n%s", out)
+	}
+	for _, leak := range []string{"GET /v1", "/v1/orders", "8812"} {
+		if strings.Contains(out, leak) {
+			t.Fatalf("output contains %q:\n%s", leak, out)
+		}
 	}
 	if len(b.usagePosts) != 0 {
 		t.Fatalf("%d posts", len(b.usagePosts))

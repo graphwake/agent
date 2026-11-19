@@ -42,10 +42,19 @@ func LooksPersonal(name string) bool {
 }
 
 // looksLikePath reports whether a caller name looks like a path or a URL: the trimmed name starts with "/", or
-// contains "://" or "?". "team/app" is not one.
+// contains "://" or "?", or any of its whitespace-separated words starts with "/" and is longer than one character
+// (a method-prefixed path such as "GET /v1/orders/8812"). "team/app" and "Checkout / Web" are not one.
 func looksLikePath(name string) bool {
 	name = strings.TrimSpace(name)
-	return strings.HasPrefix(name, "/") || strings.Contains(name, "://") || strings.Contains(name, "?")
+	if strings.HasPrefix(name, "/") || strings.Contains(name, "://") || strings.Contains(name, "?") {
+		return true
+	}
+	for _, word := range strings.Fields(name) {
+		if len(word) > 1 && strings.HasPrefix(word, "/") {
+			return true
+		}
+	}
+	return false
 }
 
 // looksRandom tells a secret from a long service name: a secret is pure hexadecimal or mixes upper-case letters,

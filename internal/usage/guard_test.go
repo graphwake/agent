@@ -49,6 +49,11 @@ func TestLooksPersonal(t *testing.T) {
 		{"orders?page=2", true},
 		{"team/app", false},
 		{"a/b/c", false},
+		// a word that starts with "/" and is longer than "/" (a method-prefixed path, such as a resource name)
+		{"GET /v1/orders/8812", true},
+		{"POST /orders", true},
+		{"orders /v1/x", true},
+		{"Checkout / Web", false},
 		// ordinary caller names
 		{"checkout-web", false},
 		{"master", false},

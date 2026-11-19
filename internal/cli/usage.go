@@ -359,8 +359,8 @@ func emptySummary(snap usage.Snapshot, requests int64) string {
 	case snap.AnonymousRequests == requests:
 		return "no caller names were found in the input. Check --caller-field"
 	case snap.UnmatchedRequests == 0:
-		return "no caller name could be sent: every name looked personal (an e-mail address, an IP address or a token) " +
-			"or was missing. Check --caller-field"
+		return "no caller name could be sent: every name was withheld (it looked like an e-mail address, an IP address, " +
+			"a secret, a path or a URL) or was missing. Check --caller-field"
 	}
 	return "nothing in the input matched an endpoint"
 }
