@@ -311,3 +311,21 @@ func TestPathPrefix_masks_segments(t *testing.T) {
 		t.Fatalf("list = %+v", list)
 	}
 }
+
+// The guard runs again on the name as it is cut to 200 characters: a cut can turn "10.0.0.1299" into the IP address
+// "10.0.0.1", and such a name is withheld, never sent.
+func TestAggregate_name_withheld_after_the_cut(t *testing.T) {
+	name := strings.Repeat("team-zz ", 24) + "10.0.0.1299" // 203 characters; not withheld whole
+	if LooksPersonal(name) || !LooksPersonal(name[:maxCallerRunes]) {
+		t.Fatal("the example no longer shows a name that only the cut makes personal")
+	}
+	a := NewAggregator(mustMatcher(t, shop(), ""), false)
+	a.Add(Record{Caller: name, Kind: "client", Method: "GET", Host: "orders.internal", Path: "/v1/orders/1", Count: 4, Day: "2026-11-12"})
+	s, err := a.Snapshot("apim", "1.4.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Rows) != 0 || s.WithheldRequests != 4 {
+		t.Fatalf("rows %+v, withheld %d; want no row, 4 withheld", s.Rows, s.WithheldRequests)
+	}
+}

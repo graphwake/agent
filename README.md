@@ -634,7 +634,8 @@ subscription, a consumer, a service). The agent does this with the value, in thi
 3. A value that matches one of the rules below is withheld.
 4. Any other value becomes the caller name, whatever it is (a host name or a status code, if the caller field
    names one). A value over 200 characters is cut to its first 200, and white space at the end of the cut is
-   removed.
+   removed. The cut value goes through the rules below again: a cut can make a name they withhold (from
+   `... 10.0.0.1299` it can leave `... 10.0.0.1`), and such a name is withheld too.
 
 A request that matched no endpoint adds no row, so a caller seen only in such requests is not named. Not sent
 either: the table of unmatched requests by host and path prefix, and the content of lines that could not be read.
@@ -647,7 +648,7 @@ with the most requests, then `- and N more`. The agent keeps at most 2,000 pairs
 are counted in one `- (other)` row.
 
 **Withheld caller names.** A caller name is withheld when any of these applies, to the name as it stands after
-steps 1 and 2 and before it is cut; its requests add no row and are counted in `withheldRequests`. Letters and
+steps 1 and 2, or to the name as it is cut in step 4; its requests add no row and are counted in `withheldRequests`. Letters and
 digits here are the ASCII ones (`a` to `z`, `A` to `Z`, `0` to `9`).
 
 - It contains an e-mail address of this form: one or more letters, digits or `._%+-`, then `@`, then groups of

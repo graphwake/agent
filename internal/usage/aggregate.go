@@ -45,7 +45,7 @@ func NewAggregator(m *Matcher, noCounts bool) *Aggregator {
 
 // Add counts one record. A caller that is a certificate subject is first reduced to its common name (see
 // subjectCommonName). Then the first rule that applies wins: no caller name (anonymous), a name the guard withholds
-// (withheld), no endpoint template (unmatched), else the record's row.
+// before or after it is cut to maxCallerRunes (withheld), no endpoint template (unmatched), else the record's row.
 func (a *Aggregator) Add(r Record) {
 	count := r.Count
 	if count < 1 {
@@ -74,6 +74,11 @@ func (a *Aggregator) Add(r Record) {
 	}
 	if utf8.RuneCountInString(caller) > maxCallerRunes {
 		caller = strings.TrimSpace(string([]rune(caller)[:maxCallerRunes]))
+		// The cut can make a name the guard withholds ("...10.0.0.1299" becomes "...10.0.0.1"): check it again.
+		if LooksPersonal(caller) {
+			a.withheldRequests = AddCount(a.withheldRequests, count)
+			return
+		}
 	}
 
 	e, s, ok := a.m.Match(r)
