@@ -22,6 +22,10 @@ func RenderDryRun(w io.Writer, body []byte, unmatched []PrefixCount, withheld, a
 	} else {
 		fmt.Fprintln(w, "  Requests that matched no endpoint, by host and path prefix:")
 		for _, p := range unmatched {
+			if p.Other {
+				fmt.Fprintf(w, "    (other)  %d\n", p.Count)
+				continue
+			}
 			host := p.Host
 			if host == "" {
 				host = "(no host)"

@@ -150,10 +150,82 @@ func TestAggregate_too_many_callers(t *testing.T) {
 		t.Fatalf("three callers with limit 2: err = %v, want ErrTooManyCallers", err)
 	}
 	var tooMany *TooManyCallersError
-	if !errors.As(err, &tooMany) || tooMany.Callers != 3 || tooMany.Limit != 2 {
-		t.Errorf("err = %#v, want Callers 3, Limit 2", err)
+	if !errors.As(err, &tooMany) || tooMany.Limit != 2 || err.Error() != "too many distinct callers (more than 2, limit 2)" {
+		t.Errorf("err = %#v (%v), want Limit 2, \"more than 2\"", err, err)
 	}
 
+}
+
+// Distinct callers are counted as records arrive: once the limit is passed no row and no caller is kept any more, so
+// memory stays bounded whatever the input holds, and the snapshot is refused.
+func TestAggregate_caller_limit_bounds_memory(t *testing.T) {
+	tpl := shop()
+	tpl.Limits = Limits{MaxCallers: 10}
+	a := NewAggregator(mustMatcher(t, tpl, ""), false)
+	for i := 0; i < 200000; i++ {
+		a.Add(Record{Caller: fmt.Sprintf("caller-%d", i), Kind: "client", Method: "GET", Host: "orders.internal", Path: "/v1/orders/1", Count: 1, Day: "2026-11-12"})
+		if len(a.rows) > 10 || len(a.callers) > 10 {
+			t.Fatalf("after %d callers: %d rows, %d callers kept, want at most 10", i+1, len(a.rows), len(a.callers))
+		}
+	}
+	// A caller already counted still adds to its rows.
+	a.Add(Record{Caller: "caller-3", Kind: "client", Method: "POST", Host: "orders.internal", Path: "/v1/orders", Count: 1, Day: "2026-11-12"})
+	if len(a.rows) != 11 {
+		t.Fatalf("%d rows, want 11 (a known caller's new endpoint)", len(a.rows))
+	}
+	_, err := a.Snapshot("apim", "1.4.0")
+	var tooMany *TooManyCallersError
+	if !errors.As(err, &tooMany) || tooMany.Limit != 10 || err.Error() != "too many distinct callers (more than 10, limit 10)" {
+		t.Fatalf("err = %v, want too many distinct callers (more than 10, limit 10)", err)
+	}
+}
+
+// Rows stop growing at the row limit; the snapshot is then too large, as Encode would say.
+func TestAggregate_row_limit_bounds_memory(t *testing.T) {
+	tpl := shop()
+	tpl.Limits = Limits{MaxCallers: 1000, MaxRows: 5}
+	a := NewAggregator(mustMatcher(t, tpl, ""), false)
+	for i := 0; i < 500; i++ {
+		for _, path := range []string{"/v1/orders/1", "/v1/orders"} {
+			a.Add(Record{Caller: fmt.Sprintf("caller-%d", i), Kind: "client", Method: "GET", Host: "orders.internal", Path: path, Count: 1, Day: "2026-11-12"})
+		}
+		if len(a.rows) > 5 {
+			t.Fatalf("%d rows, want at most 5", len(a.rows))
+		}
+	}
+	if _, err := a.Snapshot("apim", "1.4.0"); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("err = %v, want ErrTooLarge", err)
+	}
+}
+
+// The local table of unmatched requests keeps at most maxUnmatchedKeys host and prefix pairs; the requests of any
+// further pair are counted in one "(other)" entry. Nothing is lost from the totals.
+func TestAggregate_unmatched_table_is_capped(t *testing.T) {
+	a := NewAggregator(mustMatcher(t, shop(), ""), false)
+	const hosts = maxUnmatchedKeys + 3000
+	for i := 0; i < hosts; i++ {
+		a.Add(Record{Caller: "checkout-web", Kind: "client", Method: "GET", Host: fmt.Sprintf("host-%d.example", i), Path: "/nope/x", Count: 1, Day: "2026-11-12"})
+		if len(a.unmatched) > maxUnmatchedKeys {
+			t.Fatalf("%d unmatched keys, want at most %d", len(a.unmatched), maxUnmatchedKeys)
+		}
+	}
+	// A pair already in the table still counts there.
+	a.Add(Record{Caller: "checkout-web", Kind: "client", Method: "GET", Host: "host-0.example", Path: "/nope/x", Count: 5, Day: "2026-11-12"})
+	list := a.UnmatchedByPrefix()
+	if len(list) != maxUnmatchedKeys+1 {
+		t.Fatalf("%d entries, want %d", len(list), maxUnmatchedKeys+1)
+	}
+	var total, other int64
+	for _, p := range list {
+		total += p.Count
+		if p.Other {
+			other += p.Count
+		}
+	}
+	// Most requests first: the "(other)" entry (3000) leads, then host-0 (6).
+	if total != hosts+5 || other != 3000 || !list[0].Other || list[1].Host != "host-0.example" || list[1].Count != 6 {
+		t.Fatalf("total %d, other %d, first two %+v %+v; want %d, 3000, (other) then host-0", total, other, list[0], list[1], hosts+5)
+	}
 }
 
 func TestAggregate_default_caller_limit(t *testing.T) {
@@ -168,8 +240,8 @@ func TestAggregate_default_caller_limit(t *testing.T) {
 	a.Add(Record{Caller: "one-too-many", Kind: "client", Method: "GET", Host: "orders.internal", Path: "/v1/orders/1", Count: 1, Day: "2026-11-12"})
 	_, err := a.Snapshot("apim", "1.4.0")
 	var tooMany *TooManyCallersError
-	if !errors.As(err, &tooMany) || tooMany.Callers != 2001 || tooMany.Limit != 2000 {
-		t.Errorf("2001 callers with the default limit: err = %v, want Callers 2001, Limit 2000", err)
+	if !errors.As(err, &tooMany) || tooMany.Limit != 2000 {
+		t.Errorf("2001 callers with the default limit: err = %v, want Limit 2000", err)
 	}
 }
 

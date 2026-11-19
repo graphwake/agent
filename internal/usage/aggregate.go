@@ -10,14 +10,21 @@ import (
 // maxCallerRunes is the server's limit on a caller name; longer names are cut.
 const maxCallerRunes = 200
 
+// maxUnmatchedKeys caps the local table of unmatched requests: the requests of any further host and prefix are
+// counted in one "(other)" entry.
+const maxUnmatchedKeys = 2000
+
 // Aggregator sums records into snapshot rows. Anonymous, withheld and unmatched requests are only counted; their
 // names and paths never reach a row.
 type Aggregator struct {
 	m         *Matcher
 	noCounts  bool
 	rows      map[rowKey]*rowSum
+	callers   map[[2]string]bool    // the distinct caller name and kind pairs of rows
 	unmatched map[PrefixCount]int64 // keyed by Host and Prefix; Count is 0 in the key
 
+	unmatchedOther                                         int64 // requests of the hosts and prefixes past maxUnmatchedKeys
+	tooManyCallers, tooManyRows                            bool  // a limit was passed: no row was kept for it
 	unmatchedRequests, withheldRequests, anonymousRequests int64
 	windowStart, windowEnd                                 string
 }
@@ -31,7 +38,8 @@ type rowSum struct {
 
 // NewAggregator starts an empty summary. With noCounts the snapshot carries no request counts.
 func NewAggregator(m *Matcher, noCounts bool) *Aggregator {
-	return &Aggregator{m: m, noCounts: noCounts, rows: map[rowKey]*rowSum{}, unmatched: map[PrefixCount]int64{}}
+	return &Aggregator{m: m, noCounts: noCounts, rows: map[rowKey]*rowSum{}, callers: map[[2]string]bool{},
+		unmatched: map[PrefixCount]int64{}}
 }
 
 // Add counts one record. A caller that is a certificate subject is first reduced to its common name (see
@@ -71,7 +79,11 @@ func (a *Aggregator) Add(r Record) {
 	if !ok {
 		a.unmatchedRequests = AddCount(a.unmatchedRequests, count)
 		key := PrefixCount{Host: r.Host, Prefix: pathPrefix(r.Path)}
-		a.unmatched[key] = AddCount(a.unmatched[key], count)
+		if _, known := a.unmatched[key]; known || len(a.unmatched) < maxUnmatchedKeys {
+			a.unmatched[key] = AddCount(a.unmatched[key], count)
+		} else {
+			a.unmatchedOther = AddCount(a.unmatchedOther, count)
+		}
 		return
 	}
 
@@ -82,6 +94,18 @@ func (a *Aggregator) Add(r Record) {
 	key := rowKey{caller, kind, e.ID}
 	sum := a.rows[key]
 	if sum == nil {
+		// Past a limit nothing more is kept: the snapshot will be refused, and memory stays bounded.
+		if c := [2]string{caller, kind}; !a.callers[c] {
+			if len(a.callers) >= a.m.limits.MaxCallers {
+				a.tooManyCallers = true
+				return
+			}
+			a.callers[c] = true
+		}
+		if len(a.rows) >= a.m.limits.MaxRows {
+			a.tooManyRows = true
+			return
+		}
 		sum = &rowSum{row: Row{Caller: caller, CallerKind: kind, EndpointID: e.ID, Service: s.Name, Method: e.Method, Path: e.Path}}
 		a.rows[key] = sum
 	}
@@ -92,10 +116,16 @@ func (a *Aggregator) Add(r Record) {
 }
 
 // Snapshot builds the summary to send, rows sorted by caller, service, method, path (then kind and endpoint id).
-// It returns a *TooManyCallersError (ErrTooManyCallers) when the distinct callers are over Limits.MaxCallers.
+// It returns a *TooManyCallersError (ErrTooManyCallers) when the distinct callers went over Limits.MaxCallers, and
+// ErrTooLarge when the rows went over Limits.MaxRows.
 func (a *Aggregator) Snapshot(preset, agentVersion string) (Snapshot, error) {
+	if a.tooManyCallers {
+		return Snapshot{}, &TooManyCallersError{Limit: a.m.limits.MaxCallers}
+	}
+	if a.tooManyRows {
+		return Snapshot{}, ErrTooLarge
+	}
 	rows := make([]Row, 0, len(a.rows))
-	callers := map[[2]string]bool{}
 	for _, sum := range a.rows {
 		row := sum.row
 		if !a.noCounts {
@@ -103,10 +133,6 @@ func (a *Aggregator) Snapshot(preset, agentVersion string) (Snapshot, error) {
 			row.Count = &n
 		}
 		rows = append(rows, row)
-		callers[[2]string{row.Caller, row.CallerKind}] = true
-	}
-	if limit := a.m.limits.MaxCallers; len(callers) > limit {
-		return Snapshot{}, &TooManyCallersError{Callers: len(callers), Limit: limit}
 	}
 	sort.Slice(rows, func(i, j int) bool {
 		x, y := rows[i], rows[j]
@@ -134,18 +160,25 @@ func (a *Aggregator) Snapshot(preset, agentVersion string) (Snapshot, error) {
 	}, nil
 }
 
-// UnmatchedByPrefix lists the unmatched requests by host and first two path segments, most requests first. It is for
-// the local --dry-run table only and is never sent.
+// UnmatchedByPrefix lists the unmatched requests by host and first two path segments, most requests first, with
+// the "(other)" entry (Other) for the hosts and prefixes past maxUnmatchedKeys. It is for the local --dry-run table
+// only and is never sent.
 func (a *Aggregator) UnmatchedByPrefix() []PrefixCount {
-	list := make([]PrefixCount, 0, len(a.unmatched))
+	list := make([]PrefixCount, 0, len(a.unmatched)+1)
 	for key, n := range a.unmatched {
 		key.Count = n
 		list = append(list, key)
+	}
+	if a.unmatchedOther > 0 {
+		list = append(list, PrefixCount{Count: a.unmatchedOther, Other: true})
 	}
 	sort.Slice(list, func(i, j int) bool {
 		x, y := list[i], list[j]
 		if x.Count != y.Count {
 			return x.Count > y.Count
+		}
+		if x.Other != y.Other {
+			return y.Other // on a tie, "(other)" comes last
 		}
 		if x.Host != y.Host {
 			return x.Host < y.Host

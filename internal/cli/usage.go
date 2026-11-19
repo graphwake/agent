@@ -282,8 +282,12 @@ func buildSummary(ctx context.Context, r *report.Reporter, cfg usageConfig, pres
 	s.snap, err = agg.Snapshot(preset.Name, version)
 	var tooMany *usage.TooManyCallersError
 	if errors.As(err, &tooMany) {
-		r.Warn("usage not sent: too many distinct callers (%d, limit %d). The caller field may identify end users; "+
-			"choose another with --caller-field", tooMany.Callers, tooMany.Limit)
+		r.Warn("usage not sent: too many distinct callers (more than %d, limit %d). The caller field may identify end "+
+			"users; choose another with --caller-field", tooMany.Limit, tooMany.Limit)
+		return s, false
+	}
+	if errors.Is(err, usage.ErrTooLarge) {
+		r.Warn("usage not sent: the summary is too large")
 		return s, false
 	}
 	if err != nil {

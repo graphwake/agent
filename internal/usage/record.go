@@ -113,24 +113,27 @@ type PrefixCount struct {
 	Host   string
 	Prefix string
 	Count  int64
+	// Other marks the one entry that counts the requests of every host and prefix past the table's cap
+	// (maxUnmatchedKeys); its Host and Prefix are empty.
+	Other bool
 }
 
 var (
-	// ErrTooManyCallers: the snapshot has more distinct callers than Limits.MaxCallers. The returned error is a
+	// ErrTooManyCallers: the input has more distinct callers than Limits.MaxCallers. The returned error is a
 	// *TooManyCallersError that wraps it.
 	ErrTooManyCallers = errors.New("too many distinct callers")
 	// ErrTooLarge: the encoded snapshot is over 10 MB or has more rows than Limits.MaxRows.
 	ErrTooLarge = errors.New("usage summary too large, not sent")
 )
 
-// TooManyCallersError carries the distinct caller count and the limit it broke.
+// TooManyCallersError carries the caller limit the input went over. The agent stops counting callers there, so
+// the number is only ever "more than Limit".
 type TooManyCallersError struct {
-	Callers int
-	Limit   int
+	Limit int
 }
 
 func (e *TooManyCallersError) Error() string {
-	return fmt.Sprintf("%v (%d, limit %d)", ErrTooManyCallers, e.Callers, e.Limit)
+	return fmt.Sprintf("%v (more than %d, limit %d)", ErrTooManyCallers, e.Limit, e.Limit)
 }
 
 func (e *TooManyCallersError) Unwrap() error { return ErrTooManyCallers }

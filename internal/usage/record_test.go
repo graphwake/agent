@@ -117,13 +117,13 @@ func TestEncode_limits(t *testing.T) {
 	if _, err := Encode(s); err != nil {
 		t.Fatalf("one row with MaxRows 1: %v", err)
 	}
+	// The aggregator keeps no row past the limit and refuses the snapshot; Encode checks the limit as well.
 	a.Add(Record{Caller: "b", Kind: "client", Method: "GET", Host: "orders.internal", Path: "/v1/orders/1", Count: 1, Day: "2026-11-12"})
-	s, err = a.Snapshot("apim", "1.4.0")
-	if err != nil {
-		t.Fatal(err)
+	if _, err = a.Snapshot("apim", "1.4.0"); !errors.Is(err, ErrTooLarge) {
+		t.Errorf("two rows with MaxRows 1: Snapshot err = %v, want ErrTooLarge", err)
 	}
-	if _, err := Encode(s); !errors.Is(err, ErrTooLarge) {
-		t.Errorf("two rows with MaxRows 1: err = %v, want ErrTooLarge", err)
+	if _, err := Encode(Snapshot{Rows: make([]Row, 2), maxRows: 1}); !errors.Is(err, ErrTooLarge) {
+		t.Errorf("two rows with MaxRows 1: Encode err = %v, want ErrTooLarge", err)
 	}
 
 	big := Snapshot{Rows: []Row{{Caller: strings.Repeat("x", ingest.MaxBodyBytes)}}}
@@ -159,10 +159,10 @@ func TestEncode_default_row_limit(t *testing.T) {
 		t.Fatalf("50000 rows with the default limit: %v", err)
 	}
 	add("one-too-many")
-	if s, err = a.Snapshot("apim", "1.4.0"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Encode(s); !errors.Is(err, ErrTooLarge) {
+	if _, err = a.Snapshot("apim", "1.4.0"); !errors.Is(err, ErrTooLarge) {
 		t.Errorf("50001 rows with the default limit: err = %v, want ErrTooLarge", err)
+	}
+	if _, err := Encode(Snapshot{Rows: make([]Row, DefaultMaxRows+1)}); !errors.Is(err, ErrTooLarge) {
+		t.Errorf("Encode, 50001 rows with the default limit: err = %v, want ErrTooLarge", err)
 	}
 }

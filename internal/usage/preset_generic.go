@@ -73,7 +73,7 @@ func parseGenericCSV(br *bufio.Reader, callerField string, emit func(Record)) (P
 			}
 			return true
 		}
-		if !ok || len(fields) != width {
+		if line == nil || !ok || len(fields) != width { // nil: longer than maxLineBytes (a header that long has no columns)
 			skipped++
 			return true
 		}

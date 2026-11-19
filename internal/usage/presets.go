@@ -141,8 +141,10 @@ func eachJSONValue(br *bufio.Reader, first byte, fn func(raw []byte) bool) (read
 				return read, skipped, err
 			}
 		} else {
-			line, err := in.ReadBytes('\n')
-			if line = bytes.TrimSpace(line); len(line) > 0 {
+			line, tooLong, err := readLine(in)
+			if tooLong {
+				count(false)
+			} else if line = bytes.TrimSpace(line); len(line) > 0 {
 				count(fn(line))
 			}
 			if err == io.EOF {
@@ -466,12 +468,20 @@ func (s *jsonStream) good() {
 	s.lines.forget(s.goodEnd)
 }
 
-// eachLine calls fn for every non-blank line, trimmed, with no limit on the line length, until fn returns false.
-// err is a read error only.
+// maxLineBytes is the longest line a line-by-line preset reads; a longer line is skipped and counted as unreadable
+// without being held whole, so one huge line cannot exhaust memory.
+const maxLineBytes = 16 << 20
+
+// eachLine calls fn for every non-blank line, trimmed, until fn returns false. A line longer than maxLineBytes is
+// passed as nil, which fn counts as a line it cannot read. err is a read error only.
 func eachLine(br *bufio.Reader, fn func(line []byte) bool) error {
 	for {
-		line, err := br.ReadBytes('\n')
-		if line = bytes.TrimSpace(line); len(line) > 0 && !fn(line) {
+		line, tooLong, err := readLine(br)
+		if tooLong {
+			if !fn(nil) {
+				return nil
+			}
+		} else if line = bytes.TrimSpace(line); len(line) > 0 && !fn(line) {
 			return nil
 		}
 		if err == io.EOF {
@@ -479,6 +489,29 @@ func eachLine(br *bufio.Reader, fn func(line []byte) bool) error {
 		}
 		if err != nil {
 			return err
+		}
+	}
+}
+
+// readLine reads the next line, with its newline when it has one. A line of more than maxLineBytes (not counting the
+// newline) is read past without being kept: line is nil and tooLong is true. err is io.EOF at the end of the input,
+// as with ReadBytes.
+func readLine(br *bufio.Reader) (line []byte, tooLong bool, err error) {
+	for {
+		frag, err := br.ReadSlice('\n')
+		n := len(line) + len(frag)
+		if err == nil {
+			n-- // the newline
+		}
+		if n > maxLineBytes {
+			if err == bufio.ErrBufferFull {
+				err = discardLine(br)
+			}
+			return nil, true, err
+		}
+		line = append(line, frag...)
+		if err != bufio.ErrBufferFull {
+			return line, false, err
 		}
 	}
 }

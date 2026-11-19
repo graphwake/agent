@@ -301,7 +301,7 @@ func TestUsage_too_many_callers_is_not_sent(t *testing.T) {
 	b := newBackend(t)
 	b.templates = strings.Replace(usageTemplates, `"maxCallers":2000`, `"maxCallers":1`, 1)
 	out := b.usageRun(t, run{args: []string{"--source", "generic", "--input", writeInput(t, usageCSV)}}, false)
-	want := "WARNING graphwake: usage not sent: too many distinct callers (2, limit 1). " +
+	want := "WARNING graphwake: usage not sent: too many distinct callers (more than 1, limit 1). " +
 		"The caller field may identify end users; choose another with --caller-field"
 	if out != want || len(b.usagePosts) != 0 {
 		t.Fatalf("out = %q, %d posts", out, len(b.usagePosts))

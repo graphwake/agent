@@ -549,7 +549,8 @@ makes no network call. Source names ignore letter case.
 - In `generic`, `service` is the Graphwake service name and `path` is a concrete path or a template such as
   `/orders/{id}`.
 - In every preset, the query string of the request path is dropped before the path is matched.
-- A line or element a preset cannot read is skipped and counted; its content is never printed.
+- A line or element a preset cannot read is skipped and counted; its content is never printed. A line longer than
+  16 MB counts as one: it is read past without being kept.
 
 ### Flags and environment
 
@@ -678,7 +679,9 @@ name, and look at the caller names a `--dry-run` prints before the first real ru
 **Limits.** With more distinct callers (caller name and kind pairs) than the caller limit (2,000, unless the
 endpoint list Graphwake sends sets another), nothing is sent: so many names usually mean the caller field names end
 users, and the warning says to choose another with `--caller-field`. With more rows than the row limit (50,000
-unless the list sets another) or a summary over 10 MB, nothing is sent either.
+unless the list sets another) or a summary over 10 MB, nothing is sent either. The agent stops keeping new callers
+and rows as soon as a limit is passed, so a large input cannot exhaust its memory; that is why the warning says
+"more than" the limit instead of a count.
 
 **Example.** With an endpoint list that has one service, `orders` (server URL `https://orders.internal/v1`;
 endpoints `GET /orders/{}`, `POST /orders` and `GET /orders`), and this input:
@@ -738,7 +741,7 @@ configuration). The usage key is never printed. Warnings use the CI's warning fo
 | warning `usage not sent: the input held no requests` | The input was read but held no request. |
 | warning `usage not sent: the export was incomplete (the tool reported a timeout or a warning) and held no requests` | An incomplete export without a single request. |
 | warning `usage not sent: --service names no service in the endpoint list Graphwake sent` | Check `--service`. |
-| warning `usage not sent: too many distinct callers (2400, limit 2000). The caller field may identify end users; choose another with --caller-field` | Over the caller limit. Graphwake's own check gives the same sentence without the numbers. |
+| warning `usage not sent: too many distinct callers (more than 2000, limit 2000). The caller field may identify end users; choose another with --caller-field` | Over the caller limit. Graphwake's own check gives the same sentence without the numbers. |
 | warning `usage not sent: the summary is too large` | Over the row limit or 10 MB (the agent's check or Graphwake's). |
 | warning `usage not sent: the summary could not be built` | An internal problem building the summary. |
 | warning `usage not sent: no caller names were found in the input. Check --caller-field` | No request had a caller name. |

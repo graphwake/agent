@@ -660,3 +660,58 @@ func TestParsers_chunked_reads_match_plain(t *testing.T) {
 		}
 	}
 }
+
+// repeatReader streams n copies of one byte without holding them.
+type repeatReader struct {
+	c byte
+	n int64
+}
+
+func (r *repeatReader) Read(b []byte) (int, error) {
+	if r.n <= 0 {
+		return 0, io.EOF
+	}
+	if int64(len(b)) > r.n {
+		b = b[:r.n]
+	}
+	for i := range b {
+		b[i] = r.c
+	}
+	r.n -= int64(len(b))
+	return len(b), nil
+}
+
+// A line longer than maxLineBytes is skipped and counted as unreadable without being held whole, and reading goes on
+// at the next line; a line of exactly maxLineBytes is still read. The long lines are streamed, never built in memory.
+func TestParsers_line_over_the_cap_is_skipped(t *testing.T) {
+	const nginxGood = `{"time":"2026-11-18T10:00:00+00:00","method":"GET","host":"orders.internal","path":"/v1/orders/1","caller":"checkout-web"}`
+	const kongGood = `{"consumer":{"username":"checkout-web"},"request":{"headers":{"host":"gateway.example"},"uri":"/orders/1","method":"GET"},"started_at":1794993164000}`
+	const csvHeader = "caller,method,path,lastSeen\n"
+	const csvGood = "checkout-web,GET,/orders/1,2026-11-18"
+	cases := []struct {
+		name, preset, before, open, close, after string
+	}{
+		{"nginx", "nginx", "", `{"time":"2026-11-18T10:00:00+00:00","method":"GET","host":"orders.internal","path":"/v1/orders/1","caller":"checkout-web","pad":"`, `"}`, nginxGood},
+		{"kong lines", "kong", "", `{"pad":"`, `","consumer":{"username":"checkout-web"},"request":{"headers":{"host":"gateway.example"},"uri":"/orders/1","method":"GET"},"started_at":1794993164000}`, kongGood},
+		{"generic JSON lines", "generic", "", `{"caller":"checkout-web","method":"GET","path":"/orders/1","lastSeen":"2026-11-18","pad":"`, `"}`, `{"caller":"checkout-web","method":"GET","path":"/orders/1","lastSeen":"2026-11-18"}`},
+		{"generic CSV", "generic", csvHeader, "checkout-web,GET,/orders/", ",2026-11-18", csvGood},
+	}
+	for _, tc := range cases {
+		p, _ := PresetByName(tc.preset)
+		for _, extra := range []int64{0, 1} { // a line of exactly the cap, then one byte over
+			pad := maxLineBytes + extra - int64(len(tc.open)+len(tc.close))
+			in := io.MultiReader(strings.NewReader(tc.before+tc.open), &repeatReader{c: 'a', n: pad},
+				strings.NewReader(tc.close+"\n"+tc.after+"\n"))
+			var records int
+			res, err := p.Parse(in, ParseOptions{}, func(Record) { records++ })
+			wantRecords, wantSkipped := 2, int64(0)
+			if extra > 0 {
+				wantRecords, wantSkipped = 1, 1
+			}
+			if err != nil || records != wantRecords || res.Skipped != wantSkipped {
+				t.Errorf("%s, line of cap+%d: %d records, %d skipped, err %v; want %d, %d", tc.name, extra, records,
+					res.Skipped, err, wantRecords, wantSkipped)
+			}
+		}
+	}
+}

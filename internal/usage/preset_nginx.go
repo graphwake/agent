@@ -28,7 +28,9 @@ func parseNginx(r io.Reader, opts ParseOptions, emit func(Record)) (ParseResult,
 	// Line by line, never as one JSON array: the log is lines, and a line that starts with '[' is just a bad line.
 	var read, skipped int64
 	err = eachLine(br, func(line []byte) bool {
-		if rec, ok := nginxRecord(line, callerField); ok {
+		if line == nil { // longer than maxLineBytes
+			skipped++
+		} else if rec, ok := nginxRecord(line, callerField); ok {
 			emit(rec)
 			read++
 		} else {
