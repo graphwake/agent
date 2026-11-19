@@ -2,6 +2,7 @@ package usage
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -202,5 +203,34 @@ func TestClient_success_ignores_unknown_members(t *testing.T) {
 	res := testClient(srv.URL).Send(context.Background(), []byte(`{}`))
 	if !res.OK || strings.Contains(res.Info, "xxxx") {
 		t.Fatalf("Send = %+v", res)
+	}
+}
+
+// A redirect is never followed, whatever the http.Client given: neither the templates request nor the summary
+// reaches the address a 3xx points to, and the answer is reported as an unexpected response.
+func TestClient_never_follows_a_redirect(t *testing.T) {
+	var elsewhere atomic.Int32
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		elsewhere.Add(1)
+		io.WriteString(w, `{"services":[]}`)
+	}))
+	t.Cleanup(other.Close)
+	for _, status := range []int{301, 302, 303, 307, 308} {
+		first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, other.URL+r.URL.Path, status)
+		}))
+		c := testClient(first.URL)
+		c.HTTP = &http.Client{Timeout: time.Second} // follows redirects unless the usage client stops it
+		want := fmt.Sprintf("usage not sent: unexpected response %d", status)
+		if _, res := c.Templates(context.Background()); res.OK || res.Status != status || res.Warning != want {
+			t.Errorf("Templates %d: %+v, want %q", status, res, want)
+		}
+		if res := c.Send(context.Background(), []byte(`{"rows":[]}`)); res.OK || res.Status != status || res.Warning != want {
+			t.Errorf("Send %d: %+v, want %q", status, res, want)
+		}
+		first.Close()
+	}
+	if n := elsewhere.Load(); n != 0 {
+		t.Fatalf("the redirect target received %d requests", n)
 	}
 }

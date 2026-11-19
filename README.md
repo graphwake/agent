@@ -574,7 +574,8 @@ The agent makes two requests, both to the Graphwake API URL: `GET /api/ingest/us
 `POST /api/ingest/usage`. With `--dry-run` it makes only the first. The agent sets the headers
 `Authorization: Bearer <usage key>`, `Accept: application/json` and
 `User-Agent: graphwake-agent/<version> (<CI platform>)`, and `Content-Type: application/json` on the POST. A request
-is tried up to 3 times on a network error or HTTP 503, for at most 30 seconds in all.
+is tried up to 3 times on a network error or HTTP 503, for at most 30 seconds in all. A redirect is never followed:
+a 3xx answer ends the run with `unexpected response 3xx`, and nothing goes to the address it names.
 
 The POST body is the summary, and the summary has these fields and no others:
 
@@ -750,7 +751,7 @@ configuration). The usage key is never printed. Warnings use the CI's warning fo
 | warning `usage not sent: Graphwake rejected the summary as invalid` | HTTP 400. |
 | warning `usage not sent: Graphwake is rate limiting this key; try again later` | HTTP 429. |
 | warning `usage not sent: Graphwake could not be reached` | Network error or HTTP 503 after 3 attempts. |
-| warning `usage not sent: unexpected response 500` | Any other status. |
+| warning `usage not sent: unexpected response 500` | Any other status, a redirect (3xx) too: redirects are never followed. |
 | warning `unknown source "<name>" (one of: ...)` | `graphwake usage query` with an unknown or missing source (`no source given (one of: ...)`). |
 | `graphwake: internal error, nothing sent` | A bug in the agent; it still exits 0. |
 

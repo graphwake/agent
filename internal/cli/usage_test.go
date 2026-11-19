@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -640,5 +641,27 @@ func TestUsage_personal_subject_is_withheld_whole(t *testing.T) {
 		if strings.Contains(out, leak) {
 			t.Fatalf("output contains %q:\n%s", leak, out)
 		}
+	}
+}
+
+// A redirect on the summary's POST is not followed: the summary never reaches the address it points to (here the
+// fake backend, which counts every usage POST), and the run warns and exits 0.
+func TestUsage_summary_never_follows_a_redirect(t *testing.T) {
+	b := newBackend(t)
+	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			io.WriteString(w, usageTemplates)
+			return
+		}
+		http.Redirect(w, r, b.srv.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(front.Close)
+	out := b.usageRun(t, run{env: map[string]string{"GRAPHWAKE_URL": front.URL},
+		args: []string{"--source", "generic", "--input", writeInput(t, usageCSV)}}, false)
+	if out != "WARNING graphwake: usage not sent: unexpected response 307" {
+		t.Fatalf("out = %q", out)
+	}
+	if b.usageGets != 0 || len(b.usagePosts) != 0 {
+		t.Fatalf("the redirect target received %d templates calls and %d posts", b.usageGets, len(b.usagePosts))
 	}
 }
