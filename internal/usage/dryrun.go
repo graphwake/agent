@@ -8,29 +8,38 @@ import (
 	"unicode/utf8"
 )
 
-// RenderDryRun prints, for --dry-run, the exact body that would be sent, then what stays on this machine: the
-// unmatched requests by host and path prefix, and the withheld and anonymous request counts. The body is JSON, whose
-// encoding escapes every control character; hosts and prefixes come from the input and are printed through visible,
-// so no input can start a new output line or reach the terminal or the CI log as a command.
+// maxDryRunRows is how many entries of the unmatched table the dry run prints; the rest are summed up in one line.
+const maxDryRunRows = 20
+
+// RenderDryRun prints, for --dry-run, the exact body that would be sent, then what is not sent: the unmatched requests
+// by host and masked path prefix (the 20 with the most requests, then how many more there are), and the withheld and
+// anonymous request counts. This output goes to the job log. The body is JSON, whose encoding escapes every control
+// character; hosts and prefixes come from the input and are printed through visible, and every table row starts with
+// "- ", so no input can start a new output line or reach the terminal or the CI log as a command (GitHub's runner
+// trims leading white space before it looks for "::").
 func RenderDryRun(w io.Writer, body []byte, unmatched []PrefixCount, withheld, anonymous int64) {
 	fmt.Fprintln(w, "--- would send ---")
 	fmt.Fprintln(w, string(body))
 	fmt.Fprintln(w, "--- end ---")
-	fmt.Fprintln(w, "Not sent (stays on this machine):")
+	fmt.Fprintln(w, "Not sent to Graphwake:")
 	if len(unmatched) == 0 {
 		fmt.Fprintln(w, "  Requests that matched no endpoint: none")
 	} else {
 		fmt.Fprintln(w, "  Requests that matched no endpoint, by host and path prefix:")
-		for _, p := range unmatched {
+		for i, p := range unmatched {
+			if i == maxDryRunRows {
+				fmt.Fprintf(w, "    - and %d more\n", len(unmatched)-maxDryRunRows)
+				break
+			}
 			if p.Other {
-				fmt.Fprintf(w, "    (other)  %d\n", p.Count)
+				fmt.Fprintf(w, "    - (other)  %d\n", p.Count)
 				continue
 			}
 			host := p.Host
 			if host == "" {
 				host = "(no host)"
 			}
-			fmt.Fprintf(w, "    %s %s  %d\n", visible(host), visible(p.Prefix), p.Count)
+			fmt.Fprintf(w, "    - %s %s  %d\n", visible(host), visible(p.Prefix), p.Count)
 		}
 	}
 	fmt.Fprintf(w, "  Requests withheld because the caller name looked personal: %d\n", withheld)

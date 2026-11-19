@@ -637,8 +637,14 @@ subscription, a consumer, a service). The agent does this with the value, in thi
    removed.
 
 A request that matched no endpoint adds no row, so a caller seen only in such requests is not named. Not sent
-either: the table of unmatched requests by host and path prefix (printed by `--dry-run`
-only), and the content of lines that could not be read.
+either: the table of unmatched requests by host and path prefix, and the content of lines that could not be read.
+
+`--dry-run` prints that table to its output, which in CI is the job log, so the table is kept short and masked:
+each row starts with `- `, so no host or path from the input can begin a line as a CI command; it shows the first
+two segments of the path, and a segment with a digit, `@` or `%`, or longer than 24 characters, is printed as `*`
+(`/users/jane@contoso.com` as `/users/*`, `/v1/orders/8812` as `/*/orders`); it lists the 20 host and prefix pairs
+with the most requests, then `- and N more`. The agent keeps at most 2,000 pairs; the requests of any further pair
+are counted in one `- (other)` row.
 
 **Withheld caller names.** A caller name is withheld when any of these applies, to the name as it stands after
 steps 1 and 2 and before it is cut; its requests add no row and are counted in `withheldRequests`. Letters and
@@ -700,9 +706,9 @@ billing-worker,Service,orders,post,/v1/orders,,2026-11-18T09:12:44.1234567Z
 --- would send ---
 {"preset":"generic","agentVersion":"0.3.0","windowStart":"2026-11-15","windowEnd":"2026-11-18","countsIncluded":true,"unmatchedRequests":3,"withheldRequests":0,"anonymousRequests":5,"rows":[{"caller":"billing-worker","callerKind":"service","endpointId":"ep-create","service":"orders","method":"POST","path":"/orders","count":1,"lastSeen":"2026-11-18"},{"caller":"checkout-web","callerKind":"client","endpointId":"ep-get","service":"orders","method":"GET","path":"/orders/{}","count":42,"lastSeen":"2026-11-17"}]}
 --- end ---
-Not sent (stays on this machine):
+Not sent to Graphwake:
   Requests that matched no endpoint, by host and path prefix:
-    (no host) /orders/{}  3
+    - (no host) /orders/{}  3
   Requests withheld because the caller name looked personal: 0
   Requests without a caller name: 5
 ```

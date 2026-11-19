@@ -479,3 +479,48 @@ func contains(list []string, s string) bool {
 	}
 	return false
 }
+
+// readmeExampleTemplates is the endpoint list the README's dry-run example describes: one service, orders (server URL
+// https://orders.internal/v1), with GET /orders/{}, POST /orders and GET /orders.
+const readmeExampleTemplates = `{"source":{"id":"src-1","name":"gateway","preset":"generic"},"limits":{"maxCallers":2000,"maxRows":50000},
+  "services":[{"id":"svc-orders","name":"orders","serverUrls":["https://orders.internal/v1"],"endpoints":[
+    {"id":"ep-get","method":"GET","path":"/orders/{}"},{"id":"ep-create","method":"POST","path":"/orders"},
+    {"id":"ep-list","method":"GET","path":"/orders"}]}]}`
+
+// fencedBlock returns the body of the first fenced block of the given language after marker in text.
+func fencedBlock(t *testing.T, text, marker, lang string) string {
+	t.Helper()
+	i := strings.Index(text, marker)
+	if i < 0 {
+		t.Fatalf("README has no %q", marker)
+	}
+	open := "```" + lang + "\n"
+	j := strings.Index(text[i:], open)
+	if j < 0 {
+		t.Fatalf("no ```%s block after %q", lang, marker)
+	}
+	body := text[i+j+len(open):]
+	k := strings.Index(body, "```\n")
+	if k < 0 {
+		t.Fatalf("unclosed ```%s block after %q", lang, marker)
+	}
+	return body[:k]
+}
+
+// The README's dry-run example is the agent's output, byte for byte: its input, run against the endpoint list the
+// README describes at version 0.3.0, prints exactly the README's text block.
+func TestReadme_dry_run_example_is_the_output(t *testing.T) {
+	section := readmeSection(t, readFileT(t, readmePath), "### What the usage step sends")
+	input := fencedBlock(t, section, "**Example.**", "csv")
+	want := fencedBlock(t, section, "`graphwake usage --source generic --input usage.csv --dry-run` (agent 0.3.0) prints:", "text")
+	b := newBackend(t)
+	b.templates = readmeExampleTemplates
+	got := b.usageRun(t, run{version: "0.3.0",
+		args: []string{"--source", "generic", "--input", writeInput(t, input), "--dry-run"}}, true)
+	if got != want {
+		t.Fatalf("the README's dry-run example is not the output.\nREADME:\n%s\noutput:\n%s", want, got)
+	}
+	if len(b.usagePosts) != 0 {
+		t.Fatalf("%d posts", len(b.usagePosts))
+	}
+}

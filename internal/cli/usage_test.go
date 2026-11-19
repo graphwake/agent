@@ -161,14 +161,14 @@ func TestUsage_dry_run_sends_nothing(t *testing.T) {
 		t.Fatalf("would-send body %q: %v", lines[1], err)
 	}
 	// The local table shows the unmatched prefix; the body never does.
-	if !strings.Contains(out, "(no host) /legacy/8812  5") || strings.Contains(lines[1], "legacy") {
+	if !strings.Contains(out, "\n    - (no host) /legacy/*  5\n") || strings.Contains(lines[1], "legacy") {
 		t.Fatalf("out =\n%s", out)
 	}
 
 	// From the environment, and also when nothing matched (the table is what the Admin needs then).
 	out = b.usageRun(t, run{env: map[string]string{"GRAPHWAKE_USAGE_DRY_RUN": "yes"}, args: []string{"--source", "generic"},
 		stdin: strings.NewReader("caller,method,path,lastSeen\napp,GET,/nothing/here,2026-11-18\n")}, true)
-	if !strings.HasPrefix(out, "--- would send ---\n") || !strings.Contains(out, "(no host) /nothing/here  1") ||
+	if !strings.HasPrefix(out, "--- would send ---\n") || !strings.Contains(out, "\n    - (no host) /nothing/here  1\n") ||
 		len(b.usagePosts) != 0 {
 		t.Fatalf("out =\n%s", out)
 	}
@@ -377,11 +377,11 @@ func TestUsage_dry_run_output_is_escaped(t *testing.T) {
 	b := newBackend(t)
 	input := `{"caller":"app","method":"GET","path":"/x\n::error::y/z\r\u001b[31mw","lastSeen":"2026-11-18"}` + "\n"
 	out := b.usageRun(t, run{args: []string{"--source", "generic", "--dry-run"}, stdin: strings.NewReader(input)}, true)
-	if strings.ContainsAny(out, "\r\x1b") || !strings.Contains(out, `(no host) /x\x0a::error::y/z\x0d\x1b[31mw  1`) {
+	if strings.ContainsAny(out, "\r\x1b") || !strings.Contains(out, "\n    - (no host) /x\\x0a::error::y/*  1\n") {
 		t.Fatalf("out = %q", out)
 	}
 	for _, line := range strings.Split(out, "\n") {
-		if strings.HasPrefix(line, "::") || strings.Contains(line, "##") {
+		if strings.HasPrefix(strings.TrimLeft(line, " \t"), "::") || strings.Contains(line, "##") {
 			t.Fatalf("line can start a CI command: %q", line)
 		}
 	}
@@ -663,5 +663,36 @@ func TestUsage_summary_never_follows_a_redirect(t *testing.T) {
 	}
 	if b.usageGets != 0 || len(b.usagePosts) != 0 {
 		t.Fatalf("the redirect target received %d templates calls and %d posts", b.usageGets, len(b.usagePosts))
+	}
+}
+
+// The dry run's unmatched table goes to the job log: a host from the input cannot start a GitHub workflow command
+// (the runner trims leading white space before it looks for "::"), segments that may be ids, addresses or tokens are
+// masked, and the table stops after 20 rows.
+func TestUsage_dry_run_table_is_safe_for_the_job_log(t *testing.T) {
+	b := newBackend(t)
+	entry := func(host, uri string) string {
+		return `{"consumer":{"username":"checkout-web"},"request":{"method":"GET","uri":"` + uri + `",` +
+			`"headers":{"host":"` + host + `"}},"started_at":1794993164123}` + "\n"
+	}
+	input := entry("::error::x", "/reset-password/eyJhbGciOiJIUzI1NiJ9.SECRETTOKEN") +
+		entry("::warning::pwn", "/users/jane@contoso.com")
+	for i := 0; i < 30; i++ {
+		input += entry(fmt.Sprintf("host-%c.example", 'a'+i), "/x")
+	}
+	out := b.usageRun(t, run{args: []string{"--source", "kong", "--dry-run"}, stdin: strings.NewReader(input)}, true)
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(strings.TrimLeft(line, " \t"), "::") {
+			t.Errorf("line can start a workflow command: %q", line)
+		}
+	}
+	for _, leak := range []string{"jane", "contoso", "SECRETTOKEN", "eyJ"} {
+		if strings.Contains(out, leak) {
+			t.Errorf("output contains %q:\n%s", leak, out)
+		}
+	}
+	if !strings.Contains(out, "\n    - ::error::x /reset-password/*  1\n") || !strings.Contains(out, "\n    - and 12 more\n") ||
+		strings.Count(out, "\n    - ") != 21 {
+		t.Fatalf("out =\n%s", out)
 	}
 }

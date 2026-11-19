@@ -278,3 +278,36 @@ func TestAggregate_counts_saturate(t *testing.T) {
 		t.Fatal("AddCount")
 	}
 }
+
+// The unmatched table keeps the first two path segments; a segment that may be an id, an address, an encoded value or
+// a token (a digit, "@", "%", or more than 24 characters) is kept as "*", so neither reaches the job log and ids do
+// not make the table grow.
+func TestPathPrefix_masks_segments(t *testing.T) {
+	for path, want := range map[string]string{
+		"/legacy/orders/1":        "/legacy/orders",
+		"/legacy/8812":            "/legacy/*",
+		"/v1/orders/8812":         "/*/orders",
+		"/users/jane@contoso.com": "/users/*",
+		"/files/a%2Fb":            "/files/*",
+		"/reset-password/eyJhbGciOiJIUzI1NiJ9.SECRETTOKEN": "/reset-password/*",
+		"/abcdefghijklmnopqrstuvwx/y":                      "/abcdefghijklmnopqrstuvwx/y", // 24 characters
+		"/abcdefghijklmnopqrstuvwxy/y":                     "/*/y",                        // 25
+		"/orders/{}":                                       "/orders/{}",
+		"/éééééééééééééééééééééééé":                        "/éééééééééééééééééééééééé", // 24 characters, 48 bytes
+		"/": "/",
+		"":  "/",
+	} {
+		if got := pathPrefix(path); got != want {
+			t.Errorf("pathPrefix(%q) = %q, want %q", path, got, want)
+		}
+	}
+
+	// Ids collapse into one entry.
+	a := NewAggregator(mustMatcher(t, shop(), ""), false)
+	for i := 0; i < 5000; i++ {
+		a.Add(Record{Caller: "checkout-web", Kind: "client", Method: "GET", Host: "orders.internal", Path: fmt.Sprintf("/users/%d", i), Count: 1, Day: "2026-11-12"})
+	}
+	if list := a.UnmatchedByPrefix(); len(list) != 1 || list[0].Prefix != "/users/*" || list[0].Count != 5000 {
+		t.Fatalf("list = %+v", list)
+	}
+}

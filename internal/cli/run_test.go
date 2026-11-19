@@ -301,6 +301,8 @@ type run struct {
 	stdin io.Reader
 	// platformDeadline replaces the budget for platform API calls (0: 2 s).
 	platformDeadline time.Duration
+	// version replaces the agent version ("": 1.0.0-test).
+	version string
 }
 
 // run is exec for a run that must not fail the build.
@@ -363,6 +365,9 @@ func (b *backend) main(t *testing.T, command string, r run, env map[string]strin
 	}
 	if r.platformDeadline != 0 {
 		d.PlatformDeadline = r.platformDeadline
+	}
+	if r.version != "" {
+		d.Version = r.version
 	}
 	if d.Git == nil {
 		d.Git = fakeGit{}

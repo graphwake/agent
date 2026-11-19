@@ -14,8 +14,9 @@ const maxCallerRunes = 200
 // counted in one "(other)" entry.
 const maxUnmatchedKeys = 2000
 
-// Aggregator sums records into snapshot rows. Anonymous, withheld and unmatched requests are only counted; their
-// names and paths never reach a row.
+// Aggregator sums records into snapshot rows. Anonymous, withheld and unmatched requests add no row and are only
+// counted in the summary; nothing of their caller names or paths is sent. The host and the masked path prefix of
+// unmatched requests are kept for the --dry-run table alone (see pathPrefix and maxUnmatchedKeys).
 type Aggregator struct {
 	m         *Matcher
 	noCounts  bool
@@ -188,13 +189,30 @@ func (a *Aggregator) UnmatchedByPrefix() []PrefixCount {
 	return list
 }
 
-// pathPrefix keeps the first two segments of a raw path: "/legacy/v2/orders/1" gives "/legacy/v2".
+// pathPrefix keeps the first two segments of a raw path for the unmatched table: "/legacy/orders/1" gives
+// "/legacy/orders". A segment that may be an id, an address, an encoded value or a token is written "*" (see
+// maskSegment): "/users/jane@contoso.com" gives "/users/*", "/v1/orders/8812" gives "/*/orders".
 func pathPrefix(p string) string {
 	segs := segments(cleanPath(p))
 	if len(segs) > 2 {
 		segs = segs[:2]
 	}
+	for i, seg := range segs {
+		segs[i] = maskSegment(seg)
+	}
 	return "/" + strings.Join(segs, "/")
+}
+
+// maxSegmentRunes is the longest path segment the unmatched table shows as it is.
+const maxSegmentRunes = 24
+
+// maskSegment returns "*" for a segment with a digit, "@" or "%", or more than maxSegmentRunes characters, and the
+// segment itself otherwise.
+func maskSegment(seg string) string {
+	if strings.ContainsAny(seg, "0123456789@%") || utf8.RuneCountInString(seg) > maxSegmentRunes {
+		return "*"
+	}
+	return seg
 }
 
 // AddCount adds two request counts (both at least zero), stopping at the largest int64 instead of overflowing.
