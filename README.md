@@ -554,8 +554,9 @@ makes no network call. Source names ignore letter case.
 - In `generic`, `service` is the Graphwake service name and `path` is a concrete path or a template such as
   `/orders/{id}`.
 - In every preset, the query string of the request path is dropped before the path is matched.
-- A line or element a preset cannot read is skipped and counted; its content is never printed. A line longer than
-  16 MB counts as one: it is read past without being kept.
+- A line or element a preset cannot read is skipped and counted; its content is never printed. In an input read
+  line by line (anything but a JSON array or a Datadog or Application Insights answer), a line longer than 16 MB
+  counts as one: it is read past without being kept.
 
 ### Flags and environment
 
@@ -693,7 +694,7 @@ name, and look at the caller names a `--dry-run` prints before the first real ru
 endpoint list Graphwake sends sets another), nothing is sent: so many names usually mean the caller field names end
 users, and the warning says to choose another with `--caller-field`. With more rows than the row limit (50,000
 unless the list sets another) or a summary over 10 MB, nothing is sent either. The agent stops keeping new callers
-and rows as soon as a limit is passed, so a large input cannot exhaust its memory; that is why the warning says
+and rows as soon as a limit is passed, so their number cannot exhaust its memory; that is why the warning says
 "more than" the limit instead of a count.
 
 **Example.** With an endpoint list that has one service, `orders` (server URL `https://orders.internal/v1`;
