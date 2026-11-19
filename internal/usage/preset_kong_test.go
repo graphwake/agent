@@ -158,3 +158,36 @@ func TestKong_http_log_batches_appended(t *testing.T) {
 		assertRecords(t, got, c.want)
 	}
 }
+
+// kongNested is a valid entry with a member that nests arrays n deep, so the entry is n+1 levels deep.
+func kongNested(n int) string {
+	return `{"extra":` + strings.Repeat("[", n) + strings.Repeat("]", n) + `,"consumer":{"username":"checkout-web"},` +
+		`"request":{"headers":{"host":"gateway.example"},"uri":"/orders/1","method":"GET"},"started_at":1794993164000}`
+}
+
+// An entry nested deeper than maxKongDepth levels is not read (one line skipped), whatever Go's own decoder would
+// allow: the picker never recurses past the bound. One level less is read.
+func TestKong_nesting_deeper_than_the_bound_is_skipped(t *testing.T) {
+	for _, tc := range []struct {
+		levels  int
+		records int
+		skipped int64
+	}{
+		{maxKongDepth, 1, 0},
+		{maxKongDepth + 1, 0, 1},
+		{1000, 0, 1},
+	} {
+		for _, form := range []string{"line", "array"} {
+			input := kongNested(tc.levels - 1)
+			if form == "array" {
+				input = "[" + input + "]"
+			}
+			// A good line after it is read in both cases.
+			got, skipped, err := parse(t, "kong", input+"\n"+kongLine(`{"username":"billing-worker"}`, "")+"\n", ParseOptions{})
+			if err != nil || len(got) != tc.records+1 || skipped != tc.skipped {
+				t.Errorf("%d levels (%s): %d records, %d skipped, err %v; want %d records, %d skipped",
+					tc.levels, form, len(got), skipped, err, tc.records+1, tc.skipped)
+			}
+		}
+	}
+}

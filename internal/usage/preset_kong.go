@@ -98,10 +98,14 @@ func kongRecord(raw []byte, paths [][]string) (Record, bool) {
 	return tableRecord(r, "", time.UnixMilli(ms).UTC().Format(dayLayout))
 }
 
+// maxKongDepth is how deeply a Kong entry may nest objects and arrays (the entry itself is level 1). A deeper entry is
+// not read: the picker recurses once per level, and no real entry comes near the bound.
+const maxKongDepth = 64
+
 // pickScalars reads one JSON object and returns the text of the value at each path of member names (compared
 // ignoring case): a string, or a number as written; a missing member or null is "", and an array (a repeated
 // header) gives its first value. Every member no path names is skipped without being kept. ok is false when raw is
-// not exactly one JSON object, or a path names an object or a boolean.
+// not exactly one JSON object, a path names an object or a boolean, or the object nests deeper than maxKongDepth.
 func pickScalars(raw []byte, paths [][]string) ([]string, bool) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
@@ -111,7 +115,7 @@ func pickScalars(raw []byte, paths [][]string) ([]string, bool) {
 		all[i] = i
 	}
 	t, err := dec.Token()
-	if err != nil || t != json.Delim('{') || !pickMembers(dec, paths, all, 0, vals) {
+	if err != nil || t != json.Delim('{') || !pickMembers(dec, paths, all, 0, 1, vals) {
 		return nil, false
 	}
 	if _, err := dec.Token(); err != io.EOF { // anything after the object
@@ -121,8 +125,9 @@ func pickScalars(raw []byte, paths [][]string) ([]string, bool) {
 }
 
 // pickMembers reads the members of an object whose '{' was read, up to and including its '}'. live are the paths
-// that run through the object; depth is the index of the path element that names one of its members.
-func pickMembers(dec *json.Decoder, paths [][]string, live []int, depth int, vals []string) bool {
+// that run through the object; depth is the index of the path element that names one of its members; level is how
+// deeply the object is nested (the entry is 1).
+func pickMembers(dec *json.Decoder, paths [][]string, live []int, depth, level int, vals []string) bool {
 	for dec.More() {
 		t, err := dec.Token()
 		if err != nil {
@@ -139,7 +144,7 @@ func pickMembers(dec *json.Decoder, paths [][]string, live []int, depth int, val
 				}
 			}
 		}
-		if !pickValue(dec, paths, here, deeper, depth+1, vals) {
+		if !pickValue(dec, paths, here, deeper, depth+1, level, vals) {
 			return false
 		}
 	}
@@ -147,10 +152,15 @@ func pickMembers(dec *json.Decoder, paths [][]string, live []int, depth int, val
 	return err == nil && t == json.Delim('}')
 }
 
-// pickValue reads one member value: here are the paths that end at it, deeper the paths that continue into it.
-func pickValue(dec *json.Decoder, paths [][]string, here, deeper []int, depth int, vals []string) bool {
+// pickValue reads one member value inside an object or array at the given level: here are the paths that end at it,
+// deeper the paths that continue into it. An object or array that would be nested deeper than maxKongDepth is not
+// read (false), so the recursion never goes past the bound.
+func pickValue(dec *json.Decoder, paths [][]string, here, deeper []int, depth, level int, vals []string) bool {
 	t, err := dec.Token()
 	if err != nil {
+		return false
+	}
+	if (t == json.Delim('{') || t == json.Delim('[')) && level >= maxKongDepth {
 		return false
 	}
 	switch t {
@@ -158,15 +168,15 @@ func pickValue(dec *json.Decoder, paths [][]string, here, deeper []int, depth in
 		if len(here) > 0 {
 			return false
 		}
-		return pickMembers(dec, paths, deeper, depth, vals)
+		return pickMembers(dec, paths, deeper, depth, level+1, vals)
 	case json.Delim('['):
 		first := true
 		for dec.More() {
 			if first && len(here) > 0 {
-				if !pickValue(dec, paths, here, nil, depth, vals) {
+				if !pickValue(dec, paths, here, nil, depth, level+1, vals) {
 					return false
 				}
-			} else if !pickValue(dec, paths, nil, nil, depth, vals) { // skipped
+			} else if !pickValue(dec, paths, nil, nil, depth, level+1, vals) { // skipped
 				return false
 			}
 			first = false

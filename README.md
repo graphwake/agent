@@ -832,7 +832,8 @@ node --test azure-devops/GraphwakeUpload/index.test.js   # the Azure task (Node 
 go build -o graphwake ./cmd/graphwake
 ```
 
-Standard library only. Releases are made with GoReleaser (`.goreleaser.yaml`): binaries, `checksums.txt` and a
+Standard library only; Go 1.27.3 or later (the `go` line of `go.mod`, which the release workflow builds with).
+Releases are made with GoReleaser (`.goreleaser.yaml`): binaries, `checksums.txt` and a
 multi-arch image `ghcr.io/graphwake/agent` (distroless, with a busybox shell for GitLab and Jenkins). The release
 workflow is in `release/github-workflow.yml`; copy it to `.github/workflows/` of the repository that publishes the
 releases (instructions at the top of the file) and push a tag `vX.Y.Z`. The GitHub Action, the GitLab template and
