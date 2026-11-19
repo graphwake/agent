@@ -49,7 +49,7 @@ var kongPaths = [][]string{
 	kongStartedAt:  {"started_at"},
 }
 
-func parseKong(r io.Reader, opts ParseOptions, emit func(Record)) (int64, error) {
+func parseKong(r io.Reader, opts ParseOptions, emit func(Record)) (ParseResult, error) {
 	paths := kongPaths
 	if opts.CallerField != "" { // a dotted path, such as consumer.custom_id or request.headers.x-client-id
 		paths = append(paths[:len(paths):len(paths)], strings.Split(opts.CallerField, "."))

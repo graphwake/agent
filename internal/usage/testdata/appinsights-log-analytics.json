@@ -1,0 +1,29 @@
+[
+  {
+    "AppRoleName": "checkout-web",
+    "Calls": "42",
+    "Host": "orders.internal",
+    "LastSeen": "2026-11-18T09:12:44.123Z",
+    "Method": "GET",
+    "Path": "/v1/orders/8812",
+    "TableName": "PrimaryResult"
+  },
+  {
+    "AppRoleName": "billing-worker",
+    "Calls": "7",
+    "Host": "Orders.Internal:443",
+    "LastSeen": "2026-11-17T23:59:59.9999999Z",
+    "Method": "post",
+    "Path": "/v1/orders",
+    "TableName": "PrimaryResult"
+  },
+  {
+    "AppRoleName": "None",
+    "Calls": "3",
+    "Host": "inventory.internal",
+    "LastSeen": "2026-11-16T14:00:00Z",
+    "Method": "GET",
+    "Path": "/items",
+    "TableName": "PrimaryResult"
+  }
+]

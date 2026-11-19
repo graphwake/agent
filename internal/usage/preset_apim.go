@@ -18,7 +18,7 @@ const apimQuery = `ApiManagementGatewayLogs
 // strings, with null written as "None".
 var apimPreset = Preset{Name: "apim", DefaultKind: "client", Parse: parseApim, Query: apimQuery}
 
-func parseApim(r io.Reader, opts ParseOptions, emit func(Record)) (int64, error) {
+func parseApim(r io.Reader, opts ParseOptions, emit func(Record)) (ParseResult, error) {
 	callerField := opts.CallerField
 	if callerField == "" {
 		callerField = "ApimSubscriptionId"

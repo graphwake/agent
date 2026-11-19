@@ -1,0 +1,59 @@
+{
+  "tables": [
+    {
+      "columns": [
+        {
+          "name": "AppRoleName",
+          "type": "string"
+        },
+        {
+          "name": "Host",
+          "type": "string"
+        },
+        {
+          "name": "Method",
+          "type": "string"
+        },
+        {
+          "name": "Path",
+          "type": "string"
+        },
+        {
+          "name": "Calls",
+          "type": "long"
+        },
+        {
+          "name": "LastSeen",
+          "type": "datetime"
+        }
+      ],
+      "name": "PrimaryResult",
+      "rows": [
+        [
+          "checkout-web",
+          "orders.internal",
+          "GET",
+          "/v1/orders/8812",
+          42,
+          "2026-11-18T09:12:44.123Z"
+        ],
+        [
+          "billing-worker",
+          "Orders.Internal:443",
+          "post",
+          "/v1/orders",
+          7,
+          "2026-11-17T23:59:59.9999999Z"
+        ],
+        [
+          null,
+          "inventory.internal",
+          "GET",
+          "/items",
+          3,
+          "2026-11-16T14:00:00Z"
+        ]
+      ]
+    }
+  ]
+}

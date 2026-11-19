@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -184,7 +185,7 @@ func TestUsage_query_prints_kql_without_network(t *testing.T) {
 		t.Fatalf("out =\n%s", out)
 	}
 	if out := b.usageRun(t, run{args: []string{"query", "--source", "nope"}}, false); out !=
-		`WARNING graphwake: unknown source "nope" (one of: apim, generic, kong, nginx, otel)` {
+		`WARNING graphwake: unknown source "nope" (one of: apim, appinsights, datadog, generic, kong, nginx, otel)` {
 		t.Fatalf("out = %q", out)
 	}
 	if b.usageGets != 0 || len(b.usagePosts) != 0 {
@@ -208,9 +209,9 @@ func TestUsage_every_failure_exits_zero(t *testing.T) {
 		{name: "no key", env: map[string]string{"GRAPHWAKE_USAGE_KEY": "<unset>"},
 			want: "usage not sent: no usage key (set GRAPHWAKE_USAGE_KEY)"},
 		{name: "unknown source", args: []string{"--source", "acme-gateway"},
-			want: `usage not sent: unknown source "acme-gateway" (one of: apim, generic, kong, nginx, otel)`},
+			want: `usage not sent: unknown source "acme-gateway" (one of: apim, appinsights, datadog, generic, kong, nginx, otel)`},
 		{name: "no source", args: []string{"--source", ""},
-			want: "usage not sent: no source given (one of: apim, generic, kong, nginx, otel)"},
+			want: "usage not sent: no source given (one of: apim, appinsights, datadog, generic, kong, nginx, otel)"},
 		{name: "unknown flag", args: []string{"--nope"}, want: "usage not sent: invalid arguments: unknown flag"},
 		{name: "bad URL", env: map[string]string{"GRAPHWAKE_URL": "ftp://x"},
 			want: "usage not sent: GRAPHWAKE_URL must be an http(s) URL"},
@@ -290,7 +291,7 @@ func TestUsage_output_never_contains_key_or_raw_path(t *testing.T) {
 	}
 	long := "gwu_" + strings.Repeat("Ab3_", 10) + "xyz"
 	if out := b.usageRun(t, run{args: []string{"--source", long}}, false); out !=
-		"WARNING graphwake: usage not sent: unknown source (one of: apim, generic, kong, nginx, otel)" {
+		"WARNING graphwake: usage not sent: unknown source (one of: apim, appinsights, datadog, generic, kong, nginx, otel)" {
 		t.Fatalf("out = %q", out)
 	}
 }
@@ -400,5 +401,45 @@ func TestUsage_caller_with_ci_command_is_withheld(t *testing.T) {
 	}
 	if len(b.usagePosts) != 0 {
 		t.Fatalf("%d posts", len(b.usagePosts))
+	}
+}
+
+// A Datadog answer that reports a timeout or a warning still sends what it holds; the success line says the export
+// was incomplete. The alias "dd" names the datadog preset, and the snapshot carries the canonical name.
+func TestUsage_reports_an_incomplete_export(t *testing.T) {
+	bucket := func(service, path string, count int) string {
+		return fmt.Sprintf(`{"type":"bucket","attributes":{"by":{"service":%q,"@http.url_details.host":"orders.internal",`+
+			`"@http.url_details.path":%q,"@http.method":"GET"},"compute":{"c0":%d}}}`, service, path, count)
+	}
+	answer := func(status string) string {
+		return `{"data":[` + bucket("checkout-web", "/v1/orders/8812", 42) + `,` + bucket("checkout-web", "/v1/orders", 3) +
+			`],"meta":{"status":"` + status + `"}}` + `{"data":[` + bucket("billing-worker", "/v1/orders/7", 1) + `],"meta":{"status":"done"}}`
+	}
+	const sent = "graphwake: usage sent: 2 callers, 3 endpoint rows (1 new caller, 2 suggestions, 0 subscriptions added)."
+	const incomplete = " The export was incomplete (the tool reported a timeout or a warning)."
+
+	b := newBackend(t)
+	out := b.usageRun(t, run{args: []string{"--source", "dd"}, stdin: strings.NewReader(answer("timeout"))}, false)
+	if out != sent+incomplete || len(b.usagePosts) != 1 {
+		t.Fatalf("out = %q, %d posts\nwant  %q", out, len(b.usagePosts), sent+incomplete)
+	}
+	var snap usage.Snapshot
+	if err := json.Unmarshal(b.usagePosts[0].Body, &snap); err != nil {
+		t.Fatal(err)
+	}
+	if snap.Preset != "datadog" || len(snap.Rows) != 3 {
+		t.Fatalf("snapshot %+v", snap)
+	}
+
+	// The sentence comes after the others.
+	out = b.usageRun(t, run{args: []string{"--source", "datadog"}, stdin: strings.NewReader(answer("timeout") + "\nnot json\n")}, false)
+	if out != sent+" 1 line could not be read."+incomplete {
+		t.Fatalf("out = %q", out)
+	}
+
+	// A complete export says nothing of the kind.
+	out = b.usageRun(t, run{args: []string{"--source", "datadog"}, stdin: strings.NewReader(answer("done"))}, false)
+	if out != sent {
+		t.Fatalf("out = %q\nwant  %q", out, sent)
 	}
 }

@@ -19,7 +19,7 @@ var genericPreset = Preset{
 	Query: genericColumns + "\ncheckout-web,client,orders,GET,/v1/orders/8812,42,2026-11-18\n",
 }
 
-func parseGeneric(r io.Reader, opts ParseOptions, emit func(Record)) (int64, error) {
+func parseGeneric(r io.Reader, opts ParseOptions, emit func(Record)) (ParseResult, error) {
 	callerField := opts.CallerField
 	if callerField == "" {
 		callerField = "caller"
@@ -47,7 +47,7 @@ func parseGeneric(r io.Reader, opts ParseOptions, emit func(Record)) (int64, err
 
 // parseGenericCSV reads the CSV form one physical line at a time: a broken line (such as an unclosed quote) costs
 // that line alone, and memory stays bounded by the longest line. A quoted field cannot span lines.
-func parseGenericCSV(br *bufio.Reader, callerField string, emit func(Record)) (int64, error) {
+func parseGenericCSV(br *bufio.Reader, callerField string, emit func(Record)) (ParseResult, error) {
 	var (
 		cols          map[string]int // lower-case column name → index; nil until the header is read
 		width         int
@@ -92,7 +92,7 @@ func parseGenericCSV(br *bufio.Reader, callerField string, emit func(Record)) (i
 		return true
 	})
 	if headerErr != nil {
-		return 0, headerErr
+		return ParseResult{}, headerErr
 	}
 	return finish("generic", read, skipped, err)
 }

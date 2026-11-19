@@ -16,13 +16,20 @@ import (
 // parse runs a preset over the input and collects what it emits.
 func parse(t *testing.T, preset, input string, opts ParseOptions) ([]Record, int64, error) {
 	t.Helper()
+	got, res, err := parseResult(t, preset, input, opts)
+	return got, res.Skipped, err
+}
+
+// parseResult runs a preset over the input and collects what it emits, with the whole result.
+func parseResult(t *testing.T, preset, input string, opts ParseOptions) ([]Record, ParseResult, error) {
+	t.Helper()
 	p, ok := PresetByName(preset)
 	if !ok {
 		t.Fatalf("no preset %q", preset)
 	}
 	var got []Record
-	skipped, err := p.Parse(strings.NewReader(input), opts, func(r Record) { got = append(got, r) })
-	return got, skipped, err
+	res, err := p.Parse(strings.NewReader(input), opts, func(r Record) { got = append(got, r) })
+	return got, res, err
 }
 
 // parseFixture parses a file of testdata and fails the test on an error or a skipped line.
@@ -55,7 +62,7 @@ func dump(rs []Record) string {
 }
 
 func TestPresets_registry(t *testing.T) {
-	if got, want := PresetNames(), []string{"apim", "generic", "kong", "nginx", "otel"}; !reflect.DeepEqual(got, want) {
+	if got, want := PresetNames(), []string{"apim", "appinsights", "datadog", "generic", "kong", "nginx", "otel"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("PresetNames() = %v, want %v", got, want)
 	}
 	for _, name := range PresetNames() {
@@ -64,7 +71,8 @@ func TestPresets_registry(t *testing.T) {
 			t.Errorf("PresetByName(%q) = %+v, %v", name, p, ok)
 		}
 	}
-	kinds := map[string]string{"generic": "", "apim": "client", "kong": "client", "nginx": "client", "otel": "service"}
+	kinds := map[string]string{"generic": "", "apim": "client", "appinsights": "service", "datadog": "service", "kong": "client",
+		"nginx": "client", "otel": "service"}
 	for name, kind := range kinds {
 		if p, _ := PresetByName(name); p.DefaultKind != kind {
 			t.Errorf("%s DefaultKind = %q, want %q", name, p.DefaultKind, kind)
@@ -72,7 +80,62 @@ func TestPresets_registry(t *testing.T) {
 	}
 }
 
+func TestPresetByName_aliases(t *testing.T) {
+	aliases := map[string]string{
+		"app-insights": "appinsights", "applicationinsights": "appinsights", "application-insights": "appinsights",
+		"azure-apim": "apim", "api-management": "apim",
+		"opentelemetry": "otel", "otlp": "otel",
+		"dd":  "datadog",
+		"csv": "generic", "json": "generic",
+	}
+	for alias, canonical := range aliases {
+		for _, name := range []string{alias, strings.ToUpper(alias), "  " + alias + " "} {
+			p, ok := PresetByName(name)
+			if !ok || p.Name != canonical {
+				t.Errorf("PresetByName(%q) = %q, %v; want %q", name, p.Name, ok, canonical)
+			}
+		}
+	}
+	for _, name := range []string{"APIM", " Datadog ", "AppInsights"} {
+		if p, ok := PresetByName(name); !ok || !strings.EqualFold(p.Name, strings.TrimSpace(name)) {
+			t.Errorf("PresetByName(%q) = %q, %v", name, p.Name, ok)
+		}
+	}
+	for _, name := range []string{"", "datadog-apm", "app insights", "ddog"} {
+		if _, ok := PresetByName(name); ok {
+			t.Errorf("PresetByName(%q) found a preset", name)
+		}
+	}
+	// Aliases are accepted, never listed.
+	if got, want := PresetNames(), []string{"apim", "appinsights", "datadog", "generic", "kong", "nginx", "otel"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("PresetNames() = %v, want %v", got, want)
+	}
+}
+
 func TestPresets_query_texts(t *testing.T) {
+	appinsights := `// Azure Application Insights: outgoing HTTP calls of your services, last 7 days.
+// Run with:  az monitor app-insights query --app <app> --offset 7d --analytics-query "<this query>"
+AppDependencies
+| where TimeGenerated > ago(7d) and DependencyType startswith "http"
+| extend u = parse_url(Data)
+| extend Host = tolower(iff(isempty(tostring(u.Host)), Target, tostring(u.Host))),
+         Path = strcat("/", trim_start(@"/", tostring(u.Path))),
+         Method = extract(@"^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s", 1, Name)
+| summarize Calls = sum(ItemCount), LastSeen = max(TimeGenerated) by AppRoleName, Host, Method, Path
+`
+	datadog := `# Datadog APM: count outgoing HTTP calls of one service, last 7 days.
+# Run once per calling service (replace orders); append every answer to one file.
+curl -s -X POST "https://api.${DD_SITE:-datadoghq.com}/api/v2/spans/analytics/aggregate" \
+  -H "Content-Type: application/json" \
+  -H "DD-API-KEY: ${DD_API_KEY}" -H "DD-APPLICATION-KEY: ${DD_APP_KEY}" \
+  -d '{"data":{"type":"aggregate_request","attributes":{
+    "filter":{"from":"now-7d","to":"now","query":"service:orders @span.kind:client"},
+    "compute":[{"aggregation":"count","type":"total"}],
+    "group_by":[{"facet":"service","limit":1},
+      {"facet":"@http.url_details.host","limit":20},
+      {"facet":"@http.url_details.path","limit":100},
+      {"facet":"@http.method","limit":5}]}}}' >> datadog-usage.json
+`
 	apim := `ApiManagementGatewayLogs
 | where TimeGenerated > ago(7d)
 | extend u = parse_url(Url)
@@ -109,7 +172,7 @@ log_format graphwake_usage escape=json
   '"host":"$host","path":"$uri","caller":"$http_x_client_id"}';
 access_log /var/log/nginx/usage.log graphwake_usage;
 `
-	for name, want := range map[string]string{"apim": apim, "kong": kong, "nginx": nginx, "otel": otel} {
+	for name, want := range map[string]string{"apim": apim, "appinsights": appinsights, "datadog": datadog, "kong": kong, "nginx": nginx, "otel": otel} {
 		if p, _ := PresetByName(name); p.Query != want {
 			t.Errorf("%s query =\n%s\nwant\n%s", name, p.Query, want)
 		}
@@ -135,6 +198,12 @@ func TestParsers_skip_bad_lines_and_count(t *testing.T) {
 	otelLine := `{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"checkout-web"}}]},"scopeSpans":[{"spans":[{"kind":3,"startTimeUnixNano":"1794993164000000000","attributes":[{"key":"http.request.method","value":{"stringValue":"GET"}},{"key":"url.full","value":{"stringValue":"https://orders.internal/v1/orders/1"}}]}]}]}]}`
 	kongRow := `{"consumer":{"username":"checkout-web"},"request":{"headers":{"host":"gateway.example"},"uri":"/orders/1","method":"GET","querystring":{}},"started_at":1794993164000}`
 	nginxRow := `{"time":"2026-11-18T09:12:44+00:00","method":"GET","host":"gateway.example","path":"/orders/1","caller":"checkout-web"}`
+	aiRow := `{"AppRoleName":"checkout-web","Host":"orders.internal","Method":"GET","Path":"/orders/1","Calls":"2","LastSeen":"2026-11-18T09:12:44Z","TableName":"PrimaryResult"}`
+	aiTables := `{"tables":[{"name":"PrimaryResult","columns":[{"name":"AppRoleName"},{"name":"Host"},{"name":"Method"},{"name":"Path"},{"name":"Calls"},{"name":"LastSeen"}],"rows":[`
+	aiGood := `["checkout-web","orders.internal","GET","/orders/1",2,"2026-11-18T09:12:44Z"]`
+	aiDoc := aiTables + aiGood + `]}]}`
+	ddBucket := `{"type":"bucket","attributes":{"by":{"service":"checkout-web","@http.url_details.host":"orders.internal","@http.url_details.path":"/orders/1","@http.method":"GET"},"compute":{"c0":2}}}`
+	ddDoc := `{"data":[` + ddBucket + `],"meta":{"status":"done"}}`
 	garbage := marker + ` not a record {"x":`
 	errorLine := `[error] something went wrong ` + marker
 	cases := []struct {
@@ -168,6 +237,26 @@ func TestParsers_skip_bad_lines_and_count(t *testing.T) {
 		{"kong file-log lines", "kong", kongRow + "\n" + garbage + "\n" + kongRow + "\n" + strings.Replace(kongRow, `"started_at":1794993164000`, `"started_at":"`+marker+`"`, 1) + "\n", 2, 2},
 		{"kong http-log array", "kong", "[\n" + kongRow + ",\n42,\n\"" + marker + "\",\n" + strings.Replace(kongRow, `"/orders/1"`, `"`+marker+`"`, 1) + ",\n" + kongRow + "\n]", 2, 3},
 		{"nginx", "nginx", `["` + marker + `"]` + "\n" + nginxRow + "\n" + garbage + "\n" + nginxRow + "\n" + strings.Replace(nginxRow, `"GET"`, `""`, 1) + "\n", 2, 3},
+		{"appinsights log analytics array", "appinsights", "[\n" + aiRow + ",\n42,\n\"" + marker + "\",\n" + strings.Replace(aiRow, `"Calls":"2"`, `"Calls":"`+marker+`"`, 1) + ",\n" + aiRow + "\n]", 2, 3},
+		{"appinsights lines with an [error] line", "appinsights", aiRow + "\n" + errorLine + "\n" + aiRow + "\n", 2, 1},
+		{"appinsights lines with a garbage line", "appinsights", aiRow + "\n" + garbage + "\n" + aiRow + "\n", 2, 1},
+		{"appinsights tables with bad rows", "appinsights", aiTables + aiGood + `,["` + marker + `"],42,"` + marker + `",` +
+			`["` + marker + `","orders.internal","GET","/orders/1","` + marker + `","2026-11-18T09:12:44Z"],` +
+			`["a","orders.internal","GET","/orders/1",{"n":1},"2026-11-18T09:12:44Z"],` + aiGood + `]}]}`, 2, 5},
+		{"appinsights tables with an [error] line", "appinsights", aiDoc + "\n" + errorLine + "\n" + aiDoc + "\n", 2, 1},
+		// A document cut short costs one skipped value; the good one on the next line is read.
+		{"appinsights tables cut short, then a good one", "appinsights", aiTables + aiGood + "\n" + aiDoc + "\n", 2, 1},
+		{"appinsights tables cut inside a string", "appinsights", `{"tables":[{"name":"Prim` + marker + "\n" + aiDoc, 1, 1},
+		{"appinsights tables cut at the end", "appinsights", aiDoc + "\n" + aiTables + aiGood, 2, 1},
+		{"datadog answers with a garbage line", "datadog", ddDoc + "\n" + garbage + "\n" + ddDoc + "\n", 2, 1},
+		{"datadog answers with an [error] line", "datadog", ddDoc + "\n" + errorLine + "\n" + ddDoc, 2, 1},
+		{"datadog bad buckets", "datadog", `{"data":[` + ddBucket + `,42,"` + marker + `",` +
+			strings.Replace(ddBucket, `"c0":2`, `"c0":"`+marker+`"`, 1) + `,` +
+			strings.Replace(ddBucket, `"/orders/1"`, `"`+marker+`"`, 1) + `,` + ddBucket + `],"meta":{"status":"done"}}`, 2, 4},
+		{"datadog error answer", "datadog", `{"errors":["` + marker + `"]}` + "\n" + ddDoc + ddDoc, 2, 1},
+		{"datadog answer cut short, then a good one", "datadog", `{"data":[` + ddBucket + "\n" + ddDoc + "\n", 2, 1},
+		{"datadog answer cut inside a string", "datadog", `{"data":[{"type":"buck` + marker + "\n" + ddDoc, 1, 1},
+		{"datadog answer cut at the end", "datadog", ddDoc + "\n" + `{"data":[` + ddBucket, 2, 1},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -265,12 +354,19 @@ func TestParsers_read_error_is_returned(t *testing.T) {
 		"otel":    `{"resourceSpans":[]}` + "\n",
 		"kong":    `[{"request":{"uri":"/x","method":"GET"},"started_at":1794993164000},`,
 		"nginx":   `{"time":"2026-11-18T09:12:44+00:00","method":"GET","path":"/x"}` + "\n",
+		"appinsights": `{"tables":[{"columns":[{"name":"Method"},{"name":"Path"},{"name":"Calls"},{"name":"LastSeen"}],` +
+			`"rows":[["GET","/x",1,"2026-11-18T00:00:00Z"],`,
+		"datadog": `{"data":[{"attributes":{"by":{"@http.method":"GET","@http.url_details.path":"/x"},"compute":{"c0":1}}},`,
 	}
 	for preset, input := range inputs {
 		p, _ := PresetByName(preset)
-		_, err := p.Parse(&failingReader{strings.NewReader(input)}, ParseOptions{}, func(Record) {})
+		n := 0
+		_, err := p.Parse(&failingReader{strings.NewReader(input)}, ParseOptions{}, func(Record) { n++ })
 		if !errors.Is(err, errDisk) {
 			t.Errorf("%s: err = %v, want the read error", preset, err)
+		}
+		if (preset == "appinsights" || preset == "datadog") && n != 1 {
+			t.Errorf("%s: %d records before the read error, want 1", preset, n)
 		}
 	}
 }
@@ -287,6 +383,11 @@ func TestParsers_stream_large_input(t *testing.T) {
 		{"apim", "[\n", `{"ApimSubscriptionId":"checkout-web","ApiId":"orders-api","Method":"GET","Host":"gateway.example","Path":"/orders/%d","Calls":"1","LastSeen":"2026-11-18T09:12:44Z","TableName":"PrimaryResult"}`, "\n]\n", ",\n"},
 		{"kong", "", `{"consumer":{"username":"checkout-web"},"request":{"headers":{"host":"gateway.example","user-agent":"checkout-web/2.4"},"uri":"/orders/%d?expand=lines","method":"GET","querystring":{"expand":"lines"}},"started_at":1794993164000}` + "\n", "", ""},
 		{"nginx", "", `{"time":"2026-11-18T09:12:44+00:00","method":"GET","host":"gateway.example","path":"/orders/%d","caller":"checkout-web"}` + "\n", "", ""},
+		{"appinsights", `{"tables":[{"name":"PrimaryResult","columns":[{"name":"AppRoleName","type":"string"},{"name":"Host","type":"string"},` +
+			`{"name":"Method","type":"string"},{"name":"Path","type":"string"},{"name":"Calls","type":"long"},{"name":"LastSeen","type":"datetime"}],"rows":[` + "\n",
+			`["checkout-web","orders.internal","GET","/orders/%d",1,"2026-11-18T09:12:44Z"]`, "\n]}]}\n", ",\n"},
+		{"datadog", `{"data":[`, `{"type":"bucket","attributes":{"by":{"service":"checkout-web","@http.url_details.host":"orders.internal",` +
+			`"@http.url_details.path":"/orders/%d","@http.method":"GET"},"compute":{"c0":1}}}`, `],"meta":{"status":"done","elapsed":1200}}`, ","},
 		{"otel", "", `{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"checkout-web"}}]},"scopeSpans":[{"spans":[{"kind":3,"startTimeUnixNano":"1794993164000000000","attributes":[{"key":"http.request.method","value":{"stringValue":"GET"}},{"key":"url.full","value":{"stringValue":"https://orders.internal/v1/orders/%d"}}]}]}]}]}` + "\n", "", ""},
 	}
 	for _, c := range cases {
@@ -325,7 +426,7 @@ func TestParsers_stream_large_input(t *testing.T) {
 			}()
 
 			var n int
-			skipped, err := p.Parse(pr, ParseOptions{}, func(Record) {
+			res, err := p.Parse(pr, ParseOptions{}, func(Record) {
 				if n == 0 {
 					close(firstEmit)
 				}
@@ -337,8 +438,8 @@ func TestParsers_stream_large_input(t *testing.T) {
 				t.Fatal("the first record was not emitted before the rest of the input was written")
 			default:
 			}
-			if err != nil || skipped != 0 || n != total {
-				t.Errorf("records = %d, skipped = %d, err = %v; want %d, 0, nil", n, skipped, err, total)
+			if err != nil || res.Skipped != 0 || n != total {
+				t.Errorf("records = %d, skipped = %d, err = %v; want %d, 0, nil", n, res.Skipped, err, total)
 			}
 		})
 	}
@@ -406,6 +507,66 @@ func TestEachJSONValue_every_top_level_value(t *testing.T) {
 		return true
 	})
 	if err != nil || read != int64(n) || skipped != 0 {
+		t.Errorf("read = %d, skipped = %d, err = %v; want %d, 0, nil", read, skipped, err, n)
+	}
+}
+
+// eachJSONObject reads every object of a long input in order: many objects, each larger than the read buffers,
+// separated by nothing, a line break, blank lines or a space (curl appends answers without a newline).
+func TestEachJSONObject_many_large_objects(t *testing.T) {
+	var b strings.Builder
+	n := 0
+	for a := 0; a < 60; a++ {
+		b.WriteString(`{"data":[`)
+		for e := 0; e < 300; e++ {
+			if e > 0 {
+				b.WriteString(",")
+			}
+			fmt.Fprintf(&b, `{"n":%d,"pad":"%s"}`, n, strings.Repeat("x", a%7*10))
+			n++
+		}
+		b.WriteString(`],"meta":{"status":"done"}}`)
+		b.WriteString([]string{"", "\n", "\r\n\n", " "}[a%4])
+	}
+	br, first, _, _ := openInput(strings.NewReader(b.String()))
+	next := 0
+	read, skipped, err := eachJSONObject(br, first, func(s *jsonStream, count func(bool)) error {
+		if _, err := s.Token(); err != nil { // '{'
+			return err
+		}
+		for s.More() {
+			key, err := s.Key()
+			if err != nil {
+				return err
+			}
+			if key != "data" {
+				if err = s.SkipValue(); err != nil {
+					return err
+				}
+				continue
+			}
+			if _, err = s.Token(); err != nil { // '['
+				return err
+			}
+			for s.More() {
+				raw, err := s.Value()
+				if err != nil {
+					return err
+				}
+				if want := fmt.Sprintf(`{"n":%d,`, next); !strings.HasPrefix(string(raw), want) {
+					t.Fatalf("element %d = %.40s", next, raw)
+				}
+				next++
+				count(true)
+			}
+			if _, err = s.Token(); err != nil { // ']'
+				return err
+			}
+		}
+		_, err := s.Token() // '}'
+		return err
+	})
+	if err != nil || read != int64(n) || skipped != 0 || next != n {
 		t.Errorf("read = %d, skipped = %d, err = %v; want %d, 0, nil", read, skipped, err, n)
 	}
 }

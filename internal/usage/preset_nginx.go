@@ -16,7 +16,7 @@ access_log /var/log/nginx/usage.log graphwake_usage;
 // format (such as combined) is skipped and counted.
 var nginxPreset = Preset{Name: "nginx", DefaultKind: "client", Parse: parseNginx, Query: nginxQuery}
 
-func parseNginx(r io.Reader, opts ParseOptions, emit func(Record)) (int64, error) {
+func parseNginx(r io.Reader, opts ParseOptions, emit func(Record)) (ParseResult, error) {
 	callerField := opts.CallerField
 	if callerField == "" {
 		callerField = "caller"

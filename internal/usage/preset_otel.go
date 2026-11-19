@@ -58,7 +58,7 @@ type otlpAttribute struct {
 // otelCaller is the resource attribute that names the caller by default.
 const otelCaller = "service.name"
 
-func parseOtel(r io.Reader, opts ParseOptions, emit func(Record)) (int64, error) {
+func parseOtel(r io.Reader, opts ParseOptions, emit func(Record)) (ParseResult, error) {
 	callerField := opts.CallerField
 	if callerField == "" {
 		callerField = otelCaller

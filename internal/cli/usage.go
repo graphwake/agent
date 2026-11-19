@@ -22,7 +22,7 @@ const usageHelp = `usage: graphwake usage --source <preset> [--input <file>] [--
        graphwake usage query --source <preset>
 Reads a gateway log or trace export from --input or stdin and sends Graphwake a summary: which caller used which
 endpoint, how often and when last. Raw paths and personal-looking caller names stay on this machine.
-Presets: apim, generic, kong, nginx, otel. "graphwake usage query" prints the query or configuration that produces the input.
+Presets: apim, appinsights, datadog, generic, kong, nginx, otel. "graphwake usage query" prints the query or configuration that produces the input.
 --dry-run prints the summary that would be sent and what stays on this machine, and sends nothing.
 The usage key is read from GRAPHWAKE_USAGE_KEY (--key is accepted but not recommended).
 Every flag has a GRAPHWAKE_USAGE_* environment variable (GRAPHWAKE_USAGE_SOURCE, GRAPHWAKE_USAGE_INPUT, ...).`
@@ -125,7 +125,7 @@ func findPreset(source string) (p usage.Preset, problem string, ok bool) {
 	if source == "" {
 		return p, "no source given (one of: " + names + ")", false
 	}
-	if p, ok = usage.PresetByName(strings.ToLower(source)); ok {
+	if p, ok = usage.PresetByName(source); ok {
 		return p, "", true
 	}
 	if presetName.MatchString(source) {
@@ -204,6 +204,7 @@ type summary struct {
 	unmatched []usage.PrefixCount
 	requests  int64 // every request read, saturating
 	skipped   int64 // lines or elements the preset could not read
+	partial   bool  // the tool said its export is incomplete
 }
 
 func newUsageClient(cfg usageConfig, d Deps, platform ci.Platform) *usage.Client {
@@ -241,11 +242,12 @@ func buildSummary(ctx context.Context, r *report.Reporter, cfg usageConfig, pres
 
 	agg := usage.NewAggregator(matcher, cfg.NoCounts)
 	var records int64
-	s.skipped, err = preset.Parse(in, usage.ParseOptions{CallerField: cfg.CallerField}, func(rec usage.Record) {
+	parsed, err := preset.Parse(in, usage.ParseOptions{CallerField: cfg.CallerField}, func(rec usage.Record) {
 		records++
 		s.requests = usage.AddCount(s.requests, max(rec.Count, 1))
 		agg.Add(rec)
 	})
+	s.skipped, s.partial = parsed.Skipped, parsed.Partial
 	if err != nil {
 		r.Warn("usage not sent: the input could not be read")
 		return s, false
@@ -290,7 +292,7 @@ func sendSummary(ctx context.Context, r *report.Reporter, s summary, client *usa
 		r.Warn("%s", res.Warning)
 		return
 	}
-	r.Info("%s", res.Info+usageNotes(s.snap, s.skipped, res.SkippedRows))
+	r.Info("%s", res.Info+usageNotes(s.snap, s.skipped, res.SkippedRows, s.partial))
 }
 
 const noInput = "no input (give --input or pipe a file)"
@@ -330,8 +332,8 @@ func emptySummary(snap usage.Snapshot, requests int64) string {
 }
 
 // usageNotes are the sentences after the success line: what was counted but not sent, the lines the parser
-// skipped and the rows the server did not accept.
-func usageNotes(snap usage.Snapshot, skipped, notAccepted int64) string {
+// skipped, the rows the server did not accept and, last, whether the tool said its export is incomplete.
+func usageNotes(snap usage.Snapshot, skipped, notAccepted int64, partial bool) string {
 	var b strings.Builder
 	if n := snap.UnmatchedRequests; n > 0 {
 		b.WriteString(" " + usage.Plural(n, "request", "requests") + " matched no endpoint.")
@@ -351,6 +353,9 @@ func usageNotes(snap usage.Snapshot, skipped, notAccepted int64) string {
 		b.WriteString(" 1 row was not accepted.")
 	} else if notAccepted > 1 {
 		b.WriteString(fmt.Sprintf(" %d rows were not accepted.", notAccepted))
+	}
+	if partial {
+		b.WriteString(" The export was incomplete (the tool reported a timeout or a warning).")
 	}
 	return b.String()
 }
