@@ -17,10 +17,15 @@ func TestLooksPersonal(t *testing.T) {
 		{"::1", true},
 		{"2001:db8::8a2e:370:7334", true},
 		{"[fe80::1]:443", true},
-		// long token-like strings
+		// secret-like strings: 32+ characters, pure hex or mixed upper case, lower case and digits
 		{"eyJhbGciOiJIUzI1NiJ9eyJzdWIiOiIxMjM0NTY3ODkwIn0", true},
 		{"0123456789abcdef0123456789abcdef", true},
-		{"550e8400-e29b-41d4-a716-446655440000-extra", true},
+		{"da39a3ee5e6b4b0d3255bfef95601890afd80709", true},    // 40-character lower-case hex
+		{"dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk", true}, // 43-character base64url
+		// long names that do not look random (no upper case, not pure hex)
+		{"checkout-web-service-production-eu-west-1", false},
+		{"orders-fulfilment-service-production-api", false},
+		{"550e8400-e29b-41d4-a716-446655440000-extra", false},
 		// ordinary caller names
 		{"checkout-web", false},
 		{"master", false},
