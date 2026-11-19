@@ -3,19 +3,20 @@ package usage
 import "strings"
 
 // subjectTypes are the attribute types a certificate subject may have for subjectCommonName to read it, in lower
-// case.
+// case. UID, DC, emailAddress and E are not among them: a subject with one of those may be a person's (a user's
+// directory entry, a personal certificate), whose common name is the person's name, so it is not reduced; it keeps
+// its "=" and the guard withholds it.
 var subjectTypes = map[string]bool{
-	"cn": true, "o": true, "ou": true, "c": true, "l": true, "st": true, "dc": true, "street": true, "uid": true,
-	"serialnumber": true, "emailaddress": true, "e": true,
+	"cn": true, "o": true, "ou": true, "c": true, "l": true, "st": true, "street": true, "serialnumber": true,
 }
 
 // subjectCommonName returns the common name of a certificate subject, the value NGINX's $ssl_client_s_dn holds for
 // mutual TLS. ok is true only when the whole value is a subject: in the comma-separated form of RFC 2253
 // ("CN=checkout,O=Acme") or in the legacy form that starts with "/" ("/O=Acme/CN=checkout"), every part is
 // TYPE=value with a type of subjectTypes (letter case ignored), and exactly one part is a common name that is not
-// empty. Anything else is not read as a subject (ok is false): "a=b", "page=2&token=abc", a subject without a common
-// name or with two, a quoted or hexadecimal value, an escape other than a backslash before one of , + " \ < > ; = #
-// or a space.
+// empty. Anything else is not read as a subject (ok is false): "a=b", "page=2&token=abc", a subject with a UID, DC,
+// emailAddress or E part, a subject without a common name or with two, a quoted or hexadecimal value, an escape
+// other than a backslash before one of , + " \ < > ; = # or a space.
 func subjectCommonName(value string) (cn string, ok bool) {
 	legacy := strings.HasPrefix(value, "/")
 	var parts []string

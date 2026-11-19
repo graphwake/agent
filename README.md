@@ -620,11 +620,15 @@ subscription, a consumer, a service). The agent does this with the value, in thi
    next steps like any other name. From `CN=checkout,OU=Payments,O=Acme` the caller name is `checkout`. This is
    for mutual TLS (NGINX's `$ssl_client_s_dn`). A value is read as a subject only when all of it is one: parts of
    the form `TYPE=value`, separated by `,` or `+`, or each led by `/` in the older form (`/O=Acme/CN=checkout`),
-   every type one of `CN`, `O`, `OU`, `C`, `L`, `ST`, `DC`, `STREET`, `UID`, `SERIALNUMBER`, `emailAddress` or `E`
-   (in any letter case; spaces around a type or a value are ignored), with exactly one `CN` that is not empty. Any
-   other value stays as it is. That includes a subject the agent does not read: one without a common name or with
-   two, with another type, or with a value it cannot read with confidence (a quoted value or a hexadecimal escape,
-   for example). Such a subject still has its `=`, so the rules below withhold it.
+   every type one of `CN`, `O`, `OU`, `C`, `L`, `ST`, `STREET` or `SERIALNUMBER` (in any letter case; spaces
+   around a type or a value are ignored), with exactly one `CN` that is not empty. Any other value stays as it is.
+   That includes a subject the agent does not read: one without a common name or with two, with another type, or
+   with a value it cannot read with confidence (a quoted value or a hexadecimal escape, for example). A subject
+   with a `UID`, `DC`, `emailAddress` or `E` part is not read either, because it may be a person's (a user's
+   directory entry or a personal certificate, whose common name is the person's name): from
+   `CN=Jane Doe,emailAddress=jane@contoso.com` or `cn=John Smith,ou=people,dc=example,dc=com` no common name is
+   taken, and a service certificate with such a part is withheld whole too. Such a subject still has its `=`, so
+   the rules below withhold it.
 3. A value that matches one of the rules below is withheld.
 4. Any other value becomes the caller name, whatever it is (a host name or a status code, if the caller field
    names one). A value over 200 characters is cut to its first 200, and white space at the end of the cut is

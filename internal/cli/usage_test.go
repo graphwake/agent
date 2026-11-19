@@ -617,3 +617,28 @@ func TestUsage_certificate_subject_as_caller_sends_the_common_name(t *testing.T)
 		}
 	}
 }
+
+// A subject with a part that may name a person (a user DN with DC parts, a personal certificate with an e-mail
+// address or a UID) is not reduced to its common name: it stays as it is and its "=" withholds it, so the person's
+// name in its CN is never sent or printed.
+func TestUsage_personal_subject_is_withheld_whole(t *testing.T) {
+	b := newBackend(t)
+	line := func(subject string) string {
+		return `{"time":"2026-11-18T10:00:00+00:00","method":"GET","host":"orders.internal","path":"/v1/orders/8812",` +
+			`"caller":"","ssl_client_s_dn":"` + subject + `"}` + "\n"
+	}
+	input := line("cn=John Smith,ou=people,dc=example,dc=com") +
+		line("/C=US/O=Acme/CN=John Smith/emailAddress=j@x.com") +
+		line("UID=jsmith,CN=John Smith") +
+		line("CN=Jane Doe,emailAddress=jane@contoso.com")
+	out := b.usageRun(t, run{args: []string{"--source", "nginx", "--caller-field", "ssl_client_s_dn", "--dry-run"},
+		stdin: strings.NewReader(input)}, true)
+	if !strings.Contains(out, `"withheldRequests":4`) || !strings.Contains(out, `"rows":[]`) {
+		t.Fatalf("out =\n%s", out)
+	}
+	for _, leak := range []string{"John", "Smith", "Jane", "jsmith", "contoso"} {
+		if strings.Contains(out, leak) {
+			t.Fatalf("output contains %q:\n%s", leak, out)
+		}
+	}
+}

@@ -11,8 +11,7 @@ func TestSubjectCommonName(t *testing.T) {
 		{"CN=checkout,O=Acme", "checkout", true},
 		{"CN=checkout", "checkout", true},
 		{"cn=checkout,ou=Payments,o=Acme,l=Amsterdam,st=NH,c=NL", "checkout", true},
-		{"emailAddress=ops@acme.example,CN=checkout,DC=acme,DC=example", "checkout", true},
-		{"E=ops@acme.example,UID=42,SERIALNUMBER=7,STREET=Main St 1,CN=checkout", "checkout", true},
+		{"SERIALNUMBER=7,STREET=Main St 1,CN=checkout", "checkout", true},
 		{"CN = checkout, O = Acme", "checkout", true},        // spaces around the separators
 		{"CN=checkout+OU=Payments,O=Acme", "checkout", true}, // a multi-valued part
 		{"CN=Checkout Web,O=Acme", "Checkout Web", true},
@@ -37,7 +36,6 @@ func TestSubjectCommonName(t *testing.T) {
 		// the legacy form
 		{"/C=NL/O=Acme/CN=checkout", "checkout", true},
 		{"/CN=checkout", "checkout", true},
-		{"/CN=checkout/emailAddress=ops@acme.example", "checkout", true},
 		{"/O=Acme, Inc./CN=checkout", "checkout", true},
 		{"/C=NL/O=Acme", "", false},
 		{"/CN=check/out/O=Acme", "", false}, // "out" is not TYPE=value
@@ -48,8 +46,18 @@ func TestSubjectCommonName(t *testing.T) {
 		{"/v1/orders/8812", "", false},
 		{"/", "", false},
 		// not a subject, or not one this reads
-		{"OU=Payments,O=Acme", "", false},         // no common name
-		{"CN=svc,CN=Users,DC=acme", "", false},    // two common names
+		{"OU=Payments,O=Acme", "", false},      // no common name
+		{"CN=svc,CN=Users,DC=acme", "", false}, // two common names
+		// a subject with a part that may name a person (a user's directory entry, a personal certificate) is not read
+		{"cn=John Smith,ou=people,dc=example,dc=com", "", false},
+		{"/C=US/O=Acme/CN=John Smith/emailAddress=j@x.com", "", false},
+		{"UID=jsmith,CN=John Smith", "", false},
+		{"CN=Jane Doe,emailAddress=jane@contoso.com", "", false},
+		{"E=ops@acme.example,CN=checkout", "", false},
+		{"emailAddress=ops@acme.example,CN=checkout,DC=acme,DC=example", "", false},
+		{"/CN=checkout/emailAddress=ops@acme.example", "", false},
+		{"CN=checkout,uid=42", "", false},
+		{"CN=checkout+E=ops@acme.example", "", false},
 		{"CN=checkout,title=Engineer", "", false}, // a type that is not in the list
 		{"CN=checkout,2.5.4.10=Acme", "", false},  // an OID as the type
 		{"CN=checkout,Acme", "", false},           // a part that is not TYPE=value
