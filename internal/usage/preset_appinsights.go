@@ -7,8 +7,8 @@ import (
 )
 
 // appInsightsQuery is the Application Insights query whose result the appinsights preset reads.
-const appInsightsQuery = `// Azure Application Insights: outgoing HTTP calls of your services, last 7 days.
-// Run with:  az monitor app-insights query --app <app> --offset 7d --analytics-query "<this query>"
+const appInsightsQuery = `// Azure Application Insights (workspace-based): outgoing HTTP calls of your services, last 7 days.
+// Run with:  az monitor log-analytics query --workspace <workspace-id> --analytics-query "<this query>" -o json
 AppDependencies
 | where TimeGenerated > ago(7d) and DependencyType startswith "http"
 | extend u = parse_url(Data)
@@ -18,11 +18,11 @@ AppDependencies
 | summarize Calls = sum(ItemCount), LastSeen = max(TimeGenerated) by AppRoleName, Host, Method, Path
 `
 
-// appInsightsPreset reads the result of appInsightsQuery in either shape the Azure CLI writes:
-//   - `az monitor app-insights query`: the API answer {"tables":[{"name":…,"columns":[{"name":…}],"rows":[[…]]}]},
-//     whose values keep their JSON types;
-//   - `az monitor log-analytics query -o json`: an array of row objects (or one object per line) whose values are all
-//     strings, with null written as "None".
+// appInsightsPreset reads the result of appInsightsQuery (or of a similar query) in either shape the Azure CLI writes:
+//   - `az monitor log-analytics query -o json`, the command appInsightsQuery names: an array of row objects (or one
+//     object per line) whose values are all strings, with null written as "None";
+//   - `az monitor app-insights query` (classic names such as cloud_RoleName): the API answer
+//     {"tables":[{"name":…,"columns":[{"name":…}],"rows":[[…]]}]}, whose values keep their JSON types.
 //
 // Every row is a group of calls of the service the caller column names.
 var appInsightsPreset = Preset{Name: "appinsights", DefaultKind: "service", Parse: parseAppInsights, Query: appInsightsQuery}

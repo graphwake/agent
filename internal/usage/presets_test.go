@@ -114,8 +114,8 @@ func TestPresetByName_aliases(t *testing.T) {
 }
 
 func TestPresets_query_texts(t *testing.T) {
-	appinsights := `// Azure Application Insights: outgoing HTTP calls of your services, last 7 days.
-// Run with:  az monitor app-insights query --app <app> --offset 7d --analytics-query "<this query>"
+	appinsights := `// Azure Application Insights (workspace-based): outgoing HTTP calls of your services, last 7 days.
+// Run with:  az monitor log-analytics query --workspace <workspace-id> --analytics-query "<this query>" -o json
 AppDependencies
 | where TimeGenerated > ago(7d) and DependencyType startswith "http"
 | extend u = parse_url(Data)
