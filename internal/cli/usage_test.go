@@ -231,6 +231,11 @@ func TestUsage_every_failure_exits_zero(t *testing.T) {
 			want: "usage not sent: the summary is too large"},
 		{name: "422", postStatus: 422, answer: `{"code":"usage_too_many_callers","error":"x"}`,
 			want: "usage not sent: too many distinct callers. The caller field may identify end users; choose another with --caller-field"},
+		{name: "422 source full", postStatus: 422, answer: `{"code":"usage_source_callers_full","error":"SERVER-TEXT"}`,
+			want: "usage not sent: this source already holds too many callers (claimed and ignored callers count). " +
+				"Unclaim or stop ignoring callers you no longer need in Graphwake, or add a new usage source."},
+		{name: "422 without a readable body", postStatus: 422, answer: `not json`,
+			want: "usage not sent: too many distinct callers. The caller field may identify end users; choose another with --caller-field"},
 		{name: "500", postStatus: 500, want: "usage not sent: unexpected response 500"},
 		{name: "unreachable", env: map[string]string{"GRAPHWAKE_URL": closed.URL},
 			want: "usage not sent: Graphwake could not be reached"},

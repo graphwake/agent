@@ -44,6 +44,11 @@ func TestClient_status_to_result(t *testing.T) {
 		{400, `{"code":"invalid_usage_snapshot","error":"rows[3].endpointId is unknown"}`, "usage not sent: Graphwake rejected the summary as invalid"},
 		{413, `{"code":"usage_snapshot_too_large","error":"x"}`, "usage not sent: the summary is too large"},
 		{422, `{"code":"usage_too_many_callers","error":"x"}`, "usage not sent: too many distinct callers. The caller field may identify end users; choose another with --caller-field"},
+		{422, `{"code":"usage_source_callers_full","error":"SERVER-TEXT"}`, sourceCallersFull},
+		{422, ``, "usage not sent: too many distinct callers. The caller field may identify end users; choose another with --caller-field"},
+		{422, `<html>usage_source_callers_full`, "usage not sent: too many distinct callers. The caller field may identify end users; choose another with --caller-field"},
+		{422, `{"code":"usage_source_callers_full"` + strings.Repeat(" ", 70<<10) + `}`, "usage not sent: too many distinct callers. The caller field may identify end users; choose another with --caller-field"},
+		{422, `{"code":"something_new","error":"x"}`, "usage not sent: too many distinct callers. The caller field may identify end users; choose another with --caller-field"},
 		{429, `{"code":"rate_limited","error":"x"}`, "usage not sent: Graphwake is rate limiting this key; try again later"},
 		{503, ``, "usage not sent: Graphwake could not be reached"},
 		{500, `<html>`, "usage not sent: unexpected response 500"},
@@ -234,3 +239,7 @@ func TestClient_never_follows_a_redirect(t *testing.T) {
 		t.Fatalf("the redirect target received %d requests", n)
 	}
 }
+
+// sourceCallersFull is the warning for a 422 usage_source_callers_full: the source, not the summary, holds too many callers.
+const sourceCallersFull = "usage not sent: this source already holds too many callers (claimed and ignored callers count). " +
+	"Unclaim or stop ignoring callers you no longer need in Graphwake, or add a new usage source."

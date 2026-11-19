@@ -755,6 +755,7 @@ configuration). The usage key is never printed. Warnings use the CI's warning fo
 | warning `usage not sent: the export was incomplete (the tool reported a timeout or a warning) and held no requests` | An incomplete export without a single request. |
 | warning `usage not sent: --service names no service in the endpoint list Graphwake sent` | Check `--service`. |
 | warning `usage not sent: too many distinct callers (more than 2000, limit 2000). The caller field may identify end users; choose another with --caller-field` | Over the caller limit. Graphwake's own check gives the same sentence without the numbers. |
+| warning `usage not sent: this source already holds too many callers (claimed and ignored callers count). Unclaim or stop ignoring callers you no longer need in Graphwake, or add a new usage source.` | Graphwake's check: the summary fits the caller limit, but the usage source already holds as many callers as it may (2,000), counting claimed and ignored ones, even if Graphwake removed every unclaimed, not ignored caller this summary does not name; it then changes nothing. Another `--caller-field` does not help. |
 | warning `usage not sent: the summary is too large` | Over the row limit or 10 MB (the agent's check or Graphwake's). |
 | warning `usage not sent: the summary could not be built` | An internal problem building the summary. |
 | warning `usage not sent: no caller names were found in the input. Check --caller-field` | No request had a caller name. |

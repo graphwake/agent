@@ -106,7 +106,7 @@ func (c *Client) call(ctx context.Context, method, path string, body []byte) (Re
 	if err != nil {
 		return Result{Warning: unreachable}, nil
 	}
-	return interpret(status), answer
+	return interpret(status, answer), answer
 }
 
 const unreachable = "usage not sent: Graphwake could not be reached"
@@ -123,8 +123,27 @@ func noRedirects(h *http.Client) *http.Client {
 	return &c
 }
 
-// interpret maps a status to a Result. Server texts are never printed: every warning is a fixed sentence.
-func interpret(status int) Result {
+// maxErrorBody is the largest answer interpret reads an error code from; a longer one is not read.
+const maxErrorBody = 64 << 10
+
+// errorCode returns the "code" member of a JSON error answer, or "" when the answer is missing, too long or not such
+// JSON. Only the code is read, to pick a fixed sentence; the server's text is never printed.
+func errorCode(answer []byte) string {
+	if len(answer) > maxErrorBody {
+		return ""
+	}
+	var body struct {
+		Code string `json:"code"`
+	}
+	if json.Unmarshal(answer, &body) != nil {
+		return ""
+	}
+	return body.Code
+}
+
+// interpret maps a status (and, for a 422, the answer's error code) to a Result. Server texts are never printed:
+// every warning is a fixed sentence.
+func interpret(status int, answer []byte) Result {
 	r := Result{Status: status}
 	switch {
 	case status >= 200 && status <= 299:
@@ -139,6 +158,10 @@ func interpret(status int) Result {
 		r.Warning = "usage not sent: Graphwake rejected the summary as invalid"
 	case status == http.StatusRequestEntityTooLarge:
 		r.Warning = "usage not sent: the summary is too large"
+	case status == http.StatusUnprocessableEntity && errorCode(answer) == "usage_source_callers_full":
+		// The summary fits; the source already holds too many callers. Another caller field would not help.
+		r.Warning = "usage not sent: this source already holds too many callers (claimed and ignored callers count). " +
+			"Unclaim or stop ignoring callers you no longer need in Graphwake, or add a new usage source."
 	case status == http.StatusUnprocessableEntity:
 		r.Warning = "usage not sent: too many distinct callers. The caller field may identify end users; choose another with --caller-field"
 	case status == http.StatusTooManyRequests:
