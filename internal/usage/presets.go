@@ -92,8 +92,7 @@ func skipSpace(br *bufio.Reader) (first byte, ok bool, err error) {
 // ends: a top-level value that starts with '[' gives its elements, anything else gives the non-blank line it starts
 // on. Arrays and lines may follow one another in any number and order (a receiver that appends every http-log batch
 // to one file writes arrays one after another). fn reports whether it could read the value; read and skipped count
-// the answers. A syntax error inside an array ends the input (the decoder cannot find the next element) and counts
-// as one skipped element. err is a read error only.
+// the answers. A broken array never ends the input: see eachArrayElement. err is a read error only.
 func eachJSONValue(br *bufio.Reader, first byte, fn func(raw []byte) bool) (read, skipped int64, err error) {
 	count := func(ok bool) {
 		if ok {
@@ -129,41 +128,121 @@ func eachJSONValue(br *bufio.Reader, first byte, fn func(raw []byte) bool) (read
 	}
 }
 
-// eachArrayElement calls fn for every element of the array that starts at in's next byte and counts the answers.
-// more is true when the array closed, and in then goes on right after its ']'; it is false when a broken or
-// cut-short array ended the input (counted as one skipped element). err is a read error only.
+// eachArrayElement calls fn for every element of the array that starts at in's next byte and counts the answers. When
+// the array closes, in goes on right after its ']'. A syntax error inside the array (a stray "[error] ..." line, a
+// line cut short) costs one skipped element and the rest of the line the error is on, and in goes on at the next
+// line; when the error is the first thing on its line, nothing is dropped or counted and in goes on at that line,
+// whose values are then counted on their own. more is false only when the input ended inside the array (one skipped
+// element). err is a read error only.
 func eachArrayElement(in *bufio.Reader, src *pushbackReader, count func(bool), fn func(raw []byte) bool) (more bool, err error) {
-	dec := json.NewDecoder(in)
+	lines := &newlineTracker{r: in}
+	dec := json.NewDecoder(lines)
 	if _, err := dec.Token(); err != nil { // the '[' the caller saw
 		return false, err
 	}
+	goodEnd := dec.InputOffset() // the end of the last token read without error
 	for dec.More() {
 		var raw json.RawMessage
-		if err := dec.Decode(&raw); err != nil {
-			if isReadError(err) {
-				return false, err
-			}
-			count(false)
-			return false, nil
+		if err = dec.Decode(&raw); err != nil {
+			break
 		}
 		count(fn(raw))
+		goodEnd = dec.InputOffset()
+		lines.forget(goodEnd)
 	}
-	if _, err := dec.Token(); err != nil { // the closing ']'
-		if isReadError(err) {
-			return false, err
-		}
-		count(false) // the array is cut short or broken
+	if err == nil {
+		_, err = dec.Token() // the closing ']'
+	}
+	switch {
+	case err == nil:
+	case isReadError(err):
+		return false, err
+	case err == io.EOF || err == io.ErrUnexpectedEOF:
+		count(false) // the array is cut short by the end of the input
 		return false, nil
 	}
-	// The decoder reads ahead: put what it has not used, then what in still holds, back in front of the input.
-	rest, err := io.ReadAll(dec.Buffered())
+
+	// The decoder reads ahead: put what it has not used (after a syntax error: from the bad value on), then what in
+	// still holds, back in front of the input, so that nothing is lost or read twice.
+	rest, _ := io.ReadAll(dec.Buffered())
+	lineStart := false
 	if err != nil {
-		return false, err
+		// Depending on the Go version, the decoder stops on the bad value itself or before the comma and white space
+		// ahead of it: look through both for the line break that makes the bad value the first thing on its line.
+		gap := len(rest) - len(bytes.TrimLeft(rest, " \t\r\n,"))
+		lineStart = lines.seen(goodEnd, dec.InputOffset()) || bytes.IndexByte(rest[:gap], '\n') >= 0
+		rest = rest[gap:]
 	}
 	held, _ := in.Peek(in.Buffered())
 	src.unread(rest, held)
 	in.Reset(src)
-	return true, nil
+	if err == nil || lineStart {
+		return true, nil
+	}
+	count(false)
+	return true, discardLine(in)
+}
+
+// discardLine reads past the next newline, or to the end of the input, without keeping the line. err is a read
+// error only.
+func discardLine(br *bufio.Reader) error {
+	for {
+		_, err := br.ReadSlice('\n')
+		switch err {
+		case bufio.ErrBufferFull:
+			continue
+		case io.EOF:
+			return nil
+		}
+		return err
+	}
+}
+
+// newlineTracker passes reads through and remembers the offsets (from the first byte it read) of the newlines it
+// passed that forget has not dropped yet. Of a run of newlines with only white space between them it keeps the first:
+// that is all seen needs, and blank lines cannot make the list grow.
+type newlineTracker struct {
+	r        io.Reader
+	off      int64
+	newlines []int64
+	blank    bool // nothing but white space since the last kept newline
+}
+
+func (t *newlineTracker) Read(b []byte) (int, error) {
+	n, err := t.r.Read(b)
+	for i, c := range b[:n] {
+		switch c {
+		case '\n':
+			if !t.blank {
+				t.newlines = append(t.newlines, t.off+int64(i))
+				t.blank = true
+			}
+		case ' ', '\t', '\r':
+		default:
+			t.blank = false
+		}
+	}
+	t.off += int64(n)
+	return n, err
+}
+
+// forget drops the newlines before off.
+func (t *newlineTracker) forget(off int64) {
+	i := 0
+	for i < len(t.newlines) && t.newlines[i] < off {
+		i++
+	}
+	t.newlines = t.newlines[i:]
+}
+
+// seen reports whether a newline it passed lies in [from, to).
+func (t *newlineTracker) seen(from, to int64) bool {
+	for _, n := range t.newlines {
+		if n >= from && n < to {
+			return true
+		}
+	}
+	return false
 }
 
 // pushbackReader reads the bytes put back with unread before those of r.

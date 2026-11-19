@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -135,6 +136,7 @@ func TestParsers_skip_bad_lines_and_count(t *testing.T) {
 	kongRow := `{"consumer":{"username":"checkout-web"},"request":{"headers":{"host":"gateway.example"},"uri":"/orders/1","method":"GET","querystring":{}},"started_at":1794993164000}`
 	nginxRow := `{"time":"2026-11-18T09:12:44+00:00","method":"GET","host":"gateway.example","path":"/orders/1","caller":"checkout-web"}`
 	garbage := marker + ` not a record {"x":`
+	errorLine := `[error] something went wrong ` + marker
 	cases := []struct {
 		name, preset, input string
 		records             int
@@ -152,12 +154,17 @@ func TestParsers_skip_bad_lines_and_count(t *testing.T) {
 			"h,client,GET,/x,1,2026-11-18\n", 2, 6},
 		{"generic csv unclosed quote", "generic", "caller,method,path,lastSeen\na,GET,/x,2026-11-18\n\"" + marker + ",GET,/x,2026-11-18\nc,GET,/x,2026-11-18\n\"d, quoted\",GET,/x,2026-11-18\ne,GET,/x,2026-11-18\n", 4, 1},
 		{"generic json lines", "generic", `{"caller":"a","method":"GET","path":"/x","lastSeen":"2026-11-18"}` + "\n" + garbage + "\n" + `{"caller":"b","method":"GET","path":"/y","lastSeen":"2026-11-18"}`, 2, 1},
+		{"generic json lines with an [error] line", "generic", `{"caller":"a","method":"GET","path":"/x","lastSeen":"2026-11-18"}` + "\n" + errorLine + "\n" + `{"caller":"b","method":"GET","path":"/y","lastSeen":"2026-11-18"}`, 2, 1},
 		{"generic json array", "generic", `[{"caller":"a","method":"GET","path":"/x","lastSeen":"2026-11-18"}, "` + marker + `", {"caller":"b","method":{"x":1},"path":"/y","lastSeen":"2026-11-18"}, {"caller":"c","method":"GET","path":"/y","lastSeen":"2026-11-18"}]`, 2, 2},
 		{"apim json lines", "apim", apimRow + "\n" + garbage + "\n" + apimRow + "\n", 2, 1},
 		{"apim array", "apim", "[\n" + apimRow + ",\n42,\n\"" + marker + "\",\n" + strings.Replace(apimRow, `"Calls":"2"`, `"Calls":"`+marker+`"`, 1) + ",\n" + apimRow + "\n]", 2, 3},
-		{"apim broken array keeps what came before", "apim", "[\n" + apimRow + ",\n" + garbage + "\n" + apimRow + "\n]", 1, 1},
+		// The broken line and the "]" left over are skipped; the rows before and after it are read.
+		{"apim broken array keeps what came before and after", "apim", "[\n" + apimRow + ",\n" + garbage + "\n" + apimRow + "\n]", 2, 2},
+		{"apim lines with an [error] line", "apim", apimRow + "\n" + errorLine + "\n" + apimRow + "\n", 2, 1},
 		{"otel", "otel", otelLine + "\n" + garbage + "\n" + otelLine + "\n", 2, 1},
 		{"otel json array", "otel", "[" + otelLine + ",\n42,\n" + otelLine + "]", 2, 1},
+		{"otel with an [error] line", "otel", otelLine + "\n" + errorLine + "\n" + otelLine + "\n", 2, 1},
+		{"kong file-log with an [error] line", "kong", kongRow + "\n" + errorLine + "\n" + kongRow + "\n", 2, 1},
 		{"kong file-log lines", "kong", kongRow + "\n" + garbage + "\n" + kongRow + "\n" + strings.Replace(kongRow, `"started_at":1794993164000`, `"started_at":"`+marker+`"`, 1) + "\n", 2, 2},
 		{"kong http-log array", "kong", "[\n" + kongRow + ",\n42,\n\"" + marker + "\",\n" + strings.Replace(kongRow, `"/orders/1"`, `"`+marker+`"`, 1) + ",\n" + kongRow + "\n]", 2, 3},
 		{"nginx", "nginx", `["` + marker + `"]` + "\n" + nginxRow + "\n" + garbage + "\n" + nginxRow + "\n" + strings.Replace(nginxRow, `"GET"`, `""`, 1) + "\n", 2, 3},
@@ -349,7 +356,12 @@ func TestEachJSONValue_every_top_level_value(t *testing.T) {
 		{"arrays on separate lines", "[{\"n\":1}]\n\n[\n  {\"n\":2}\n]\n", []string{`{"n":1}`, `{"n":2}`}, 2, 0},
 		{"lines and arrays mixed", "{\"n\":1}\n[{\"n\":2},{\"n\":3}]\n{\"n\":4}\n[]\n{\"n\":5}", []string{`{"n":1}`, `{"n":2}`, `{"n":3}`, `{"n":4}`, `{"n":5}`}, 5, 0},
 		{"a line right after an array", "[{\"n\":1}] {\"n\":2}\n{\"n\":3}", []string{`{"n":1}`, `{"n":2}`, `{"n":3}`}, 3, 0},
-		{"a bad element in a later array ends the input", "[{\"n\":1}]\n[{\"n\":2}, oops\n{\"n\":3}\n", []string{`{"n":1}`, `{"n":2}`}, 2, 1},
+		{"a bad element costs the rest of its line", "[{\"n\":1}]\n[{\"n\":2}, oops {\"n\":9}\n{\"n\":3}\n", []string{`{"n":1}`, `{"n":2}`, `{"n":3}`}, 3, 1},
+		{"an [error] line between lines", "{\"n\":1}\n[error] something went wrong\n{\"n\":2}\n", []string{`{"n":1}`, `{"n":2}`}, 2, 1},
+		{"an [error] line between arrays", "[{\"n\":1}]\n[error] something [went] wrong\n[{\"n\":2}]", []string{`{"n":1}`, `{"n":2}`}, 2, 1},
+		{"a line cut short after an element", "[{\"n\":1},{\"n\":2}\n{\"n\":3}\n", []string{`{"n":1}`, `{"n":2}`, `{"n":3}`}, 3, 0},
+		{"a line cut short inside an element", "[{\"n\":1},{\"n\n{\"n\":3}\n[{\"n\":4}]", []string{`{"n":1}`, `{"n":3}`, `{"n":4}`}, 3, 1},
+		{"a broken pretty-printed array", "[\n  {\"n\":1},\n  {\"n\": oops},\n  {\"n\":2}\n]\n{\"n\":3}", []string{`{"n":1}`, `{"n": oops},`, `{"n":2}`, `]`, `{"n":3}`}, 3, 2},
 		{"a later array cut short", "[{\"n\":1}]\n[{\"n\":2}", []string{`{"n":1}`, `{"n":2}`}, 2, 1},
 		{"a bad line between arrays", "[{\"n\":1}]\nnot json\n[{\"n\":2}]", []string{`{"n":1}`, "not json", `{"n":2}`}, 2, 1},
 	}
@@ -362,7 +374,7 @@ func TestEachJSONValue_every_top_level_value(t *testing.T) {
 			var got []string
 			read, skipped, err := eachJSONValue(br, first, func(raw []byte) bool {
 				got = append(got, string(raw))
-				return raw[0] == '{'
+				return raw[0] == '{' && json.Valid(raw)
 			})
 			if err != nil || read != c.read || skipped != c.skipped || !reflect.DeepEqual(got, c.want) {
 				t.Errorf("values = %q, read = %d, skipped = %d, err = %v; want %q, %d, %d", got, read, skipped, err, c.want, c.read, c.skipped)
