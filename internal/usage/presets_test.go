@@ -54,7 +54,7 @@ func dump(rs []Record) string {
 }
 
 func TestPresets_registry(t *testing.T) {
-	if got, want := PresetNames(), []string{"apim", "generic", "otel"}; !reflect.DeepEqual(got, want) {
+	if got, want := PresetNames(), []string{"apim", "generic", "kong", "nginx", "otel"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("PresetNames() = %v, want %v", got, want)
 	}
 	for _, name := range PresetNames() {
@@ -63,10 +63,7 @@ func TestPresets_registry(t *testing.T) {
 			t.Errorf("PresetByName(%q) = %+v, %v", name, p, ok)
 		}
 	}
-	if _, ok := PresetByName("kong"); ok {
-		t.Error("PresetByName(kong) found a preset; Kong is Plan 2")
-	}
-	kinds := map[string]string{"generic": "", "apim": "client", "otel": "service"}
+	kinds := map[string]string{"generic": "", "apim": "client", "kong": "client", "nginx": "client", "otel": "service"}
 	for name, kind := range kinds {
 		if p, _ := PresetByName(name); p.DefaultKind != kind {
 			t.Errorf("%s DefaultKind = %q, want %q", name, p.DefaultKind, kind)
@@ -95,7 +92,23 @@ service:
   pipelines:
     traces/http_client: {receivers: [otlp], processors: [filter/http_client], exporters: [file/http_client]}
 `
-	for name, want := range map[string]string{"apim": apim, "otel": otel} {
+	kong := `# Kong: log requests with the file-log plugin, then send the file.
+# Each line is one JSON object; Graphwake reads consumer, request.method, request.uri,
+# request.headers.host and started_at, and nothing else.
+plugins:
+  - name: file-log
+    config:
+      path: /var/log/kong/usage.log
+`
+	nginx := `# NGINX: add this log format (http context), then send the file.
+# "caller" is the value that identifies the client: a header you set at the edge,
+# $remote_user for Basic auth, or $ssl_client_s_dn for mutual TLS.
+log_format graphwake_usage escape=json
+  '{"time":"$time_iso8601","method":"$request_method",'
+  '"host":"$host","path":"$uri","caller":"$http_x_client_id"}';
+access_log /var/log/nginx/usage.log graphwake_usage;
+`
+	for name, want := range map[string]string{"apim": apim, "kong": kong, "nginx": nginx, "otel": otel} {
 		if p, _ := PresetByName(name); p.Query != want {
 			t.Errorf("%s query =\n%s\nwant\n%s", name, p.Query, want)
 		}
@@ -119,6 +132,8 @@ const marker = "SECRET-MARKER-8812"
 func TestParsers_skip_bad_lines_and_count(t *testing.T) {
 	apimRow := `{"ApimSubscriptionId":"checkout-web","ApiId":"orders-api","Method":"GET","Host":"gateway.example","Path":"/orders/1","Calls":"2","LastSeen":"2026-11-18T09:12:44Z","TableName":"PrimaryResult"}`
 	otelLine := `{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"checkout-web"}}]},"scopeSpans":[{"spans":[{"kind":3,"startTimeUnixNano":"1794993164000000000","attributes":[{"key":"http.request.method","value":{"stringValue":"GET"}},{"key":"url.full","value":{"stringValue":"https://orders.internal/v1/orders/1"}}]}]}]}]}`
+	kongRow := `{"consumer":{"username":"checkout-web"},"request":{"headers":{"host":"gateway.example"},"uri":"/orders/1","method":"GET","querystring":{}},"started_at":1794993164000}`
+	nginxRow := `{"time":"2026-11-18T09:12:44+00:00","method":"GET","host":"gateway.example","path":"/orders/1","caller":"checkout-web"}`
 	garbage := marker + ` not a record {"x":`
 	cases := []struct {
 		name, preset, input string
@@ -143,6 +158,9 @@ func TestParsers_skip_bad_lines_and_count(t *testing.T) {
 		{"apim broken array keeps what came before", "apim", "[\n" + apimRow + ",\n" + garbage + "\n" + apimRow + "\n]", 1, 1},
 		{"otel", "otel", otelLine + "\n" + garbage + "\n" + otelLine + "\n", 2, 1},
 		{"otel json array", "otel", "[" + otelLine + ",\n42,\n" + otelLine + "]", 2, 1},
+		{"kong file-log lines", "kong", kongRow + "\n" + garbage + "\n" + kongRow + "\n" + strings.Replace(kongRow, `"started_at":1794993164000`, `"started_at":"`+marker+`"`, 1) + "\n", 2, 2},
+		{"kong http-log array", "kong", "[\n" + kongRow + ",\n42,\n\"" + marker + "\",\n" + strings.Replace(kongRow, `"/orders/1"`, `"`+marker+`"`, 1) + ",\n" + kongRow + "\n]", 2, 3},
+		{"nginx", "nginx", `["` + marker + `"]` + "\n" + nginxRow + "\n" + garbage + "\n" + nginxRow + "\n" + strings.Replace(nginxRow, `"GET"`, `""`, 1) + "\n", 2, 3},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -238,6 +256,8 @@ func TestParsers_read_error_is_returned(t *testing.T) {
 		"generic": "caller,method,path,lastSeen\na,GET,/x,2026-11-18\n",
 		"apim":    `[{"Method":"GET","Path":"/x","Calls":"1","LastSeen":"2026-11-18T00:00:00Z"},`,
 		"otel":    `{"resourceSpans":[]}` + "\n",
+		"kong":    `[{"request":{"uri":"/x","method":"GET"},"started_at":1794993164000},`,
+		"nginx":   `{"time":"2026-11-18T09:12:44+00:00","method":"GET","path":"/x"}` + "\n",
 	}
 	for preset, input := range inputs {
 		p, _ := PresetByName(preset)
@@ -258,6 +278,8 @@ func TestParsers_stream_large_input(t *testing.T) {
 	}{
 		{"generic", "caller,callerKind,service,method,path,count,lastSeen\n", "checkout-web,client,orders,GET,/v1/orders/%d,1,2026-11-18\n", "", ""},
 		{"apim", "[\n", `{"ApimSubscriptionId":"checkout-web","ApiId":"orders-api","Method":"GET","Host":"gateway.example","Path":"/orders/%d","Calls":"1","LastSeen":"2026-11-18T09:12:44Z","TableName":"PrimaryResult"}`, "\n]\n", ",\n"},
+		{"kong", "", `{"consumer":{"username":"checkout-web"},"request":{"headers":{"host":"gateway.example","user-agent":"checkout-web/2.4"},"uri":"/orders/%d?expand=lines","method":"GET","querystring":{"expand":"lines"}},"started_at":1794993164000}` + "\n", "", ""},
+		{"nginx", "", `{"time":"2026-11-18T09:12:44+00:00","method":"GET","host":"gateway.example","path":"/orders/%d","caller":"checkout-web"}` + "\n", "", ""},
 		{"otel", "", `{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"checkout-web"}}]},"scopeSpans":[{"spans":[{"kind":3,"startTimeUnixNano":"1794993164000000000","attributes":[{"key":"http.request.method","value":{"stringValue":"GET"}},{"key":"url.full","value":{"stringValue":"https://orders.internal/v1/orders/%d"}}]}]}]}]}` + "\n", "", ""},
 	}
 	for _, c := range cases {

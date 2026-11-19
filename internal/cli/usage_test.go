@@ -184,7 +184,7 @@ func TestUsage_query_prints_kql_without_network(t *testing.T) {
 		t.Fatalf("out =\n%s", out)
 	}
 	if out := b.usageRun(t, run{args: []string{"query", "--source", "nope"}}, false); out !=
-		`WARNING graphwake: unknown source "nope" (one of: apim, generic, otel)` {
+		`WARNING graphwake: unknown source "nope" (one of: apim, generic, kong, nginx, otel)` {
 		t.Fatalf("out = %q", out)
 	}
 	if b.usageGets != 0 || len(b.usagePosts) != 0 {
@@ -207,10 +207,10 @@ func TestUsage_every_failure_exits_zero(t *testing.T) {
 	}{
 		{name: "no key", env: map[string]string{"GRAPHWAKE_USAGE_KEY": "<unset>"},
 			want: "usage not sent: no usage key (set GRAPHWAKE_USAGE_KEY)"},
-		{name: "unknown source", args: []string{"--source", "kong"},
-			want: `usage not sent: unknown source "kong" (one of: apim, generic, otel)`},
+		{name: "unknown source", args: []string{"--source", "acme-gateway"},
+			want: `usage not sent: unknown source "acme-gateway" (one of: apim, generic, kong, nginx, otel)`},
 		{name: "no source", args: []string{"--source", ""},
-			want: "usage not sent: no source given (one of: apim, generic, otel)"},
+			want: "usage not sent: no source given (one of: apim, generic, kong, nginx, otel)"},
 		{name: "unknown flag", args: []string{"--nope"}, want: "usage not sent: invalid arguments: unknown flag"},
 		{name: "bad URL", env: map[string]string{"GRAPHWAKE_URL": "ftp://x"},
 			want: "usage not sent: GRAPHWAKE_URL must be an http(s) URL"},
@@ -290,7 +290,7 @@ func TestUsage_output_never_contains_key_or_raw_path(t *testing.T) {
 	}
 	long := "gwu_" + strings.Repeat("Ab3_", 10) + "xyz"
 	if out := b.usageRun(t, run{args: []string{"--source", long}}, false); out !=
-		"WARNING graphwake: usage not sent: unknown source (one of: apim, generic, otel)" {
+		"WARNING graphwake: usage not sent: unknown source (one of: apim, generic, kong, nginx, otel)" {
 		t.Fatalf("out = %q", out)
 	}
 }

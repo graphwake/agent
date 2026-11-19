@@ -1,0 +1,4 @@
+{"time":"2026-11-18T10:12:44+01:00","method":"GET","host":"Gateway.Example","path":"/orders/v1/orders/8812","caller":"checkout-web"}
+{"time":"2026-11-17T21:05:10+00:00","method":"post","host":"gateway.example","path":"/billing/invoices/41/lines/3","caller":"billing-worker"}
+{"time":"2026-11-16T03:00:01+03:00","method":"DELETE","host":"","path":"/orders/v1/orders/9","caller":""}
+{"time":"2026-11-16T08:30:00+00:00","method":"GET","host":"gateway.example","path":"/inventory/items","caller":"-"}

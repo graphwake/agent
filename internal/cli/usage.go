@@ -22,7 +22,7 @@ const usageHelp = `usage: graphwake usage --source <preset> [--input <file>] [--
        graphwake usage query --source <preset>
 Reads a gateway log or trace export from --input or stdin and sends Graphwake a summary: which caller used which
 endpoint, how often and when last. Raw paths and personal-looking caller names stay on this machine.
-Presets: apim, generic, otel. "graphwake usage query" prints the query or configuration that produces the input.
+Presets: apim, generic, kong, nginx, otel. "graphwake usage query" prints the query or configuration that produces the input.
 --dry-run prints the summary that would be sent and what stays on this machine, and sends nothing.
 The usage key is read from GRAPHWAKE_USAGE_KEY (--key is accepted but not recommended).
 Every flag has a GRAPHWAKE_USAGE_* environment variable (GRAPHWAKE_USAGE_SOURCE, GRAPHWAKE_USAGE_INPUT, ...).`

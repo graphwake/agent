@@ -1,0 +1,32 @@
+[
+  {
+    "route": {"name": "inventory_route", "paths": ["/inventory"]},
+    "client_ip": "203.0.113.5",
+    "consumer": {"id": "3f6b2d1c-8e4a-4c7f-b0a9-5d2e1f3c6b70", "username": "partner-portal"},
+    "authenticated_entity": {"id": "0b4c8e2a-1d6f-4a3b-9c7e-2f5a8d1b3e60"},
+    "request": {
+      "headers": {"host": "api.example", "user-agent": "partner-portal/3.1", "proxy-authorization": "REDACTED"},
+      "uri": "/inventory/items/77?fields=stock",
+      "method": "GET",
+      "querystring": {"fields": "stock"},
+      "url": "https://api.example/inventory/items/77?fields=stock"
+    },
+    "upstream_uri": "/items/77?fields=stock",
+    "started_at": 1794993164000,
+    "service": {"host": "inventory.internal", "name": "inventory_service"}
+  },
+  {
+    "route": {"name": "inventory_route", "paths": ["/inventory"]},
+    "client_ip": "203.0.113.6",
+    "request": {
+      "headers": {"host": "api.example:443", "user-agent": "HTTPie/3.2.3"},
+      "uri": "/inventory/items",
+      "method": "POST",
+      "querystring": {},
+      "url": "https://api.example/inventory/items"
+    },
+    "upstream_uri": "/items",
+    "started_at": 1794787199000,
+    "service": {"host": "inventory.internal", "name": "inventory_service"}
+  }
+]

@@ -16,7 +16,7 @@ import (
 
 // Preset reads one tool's export and turns it into records.
 type Preset struct {
-	Name        string // "generic" | "apim" | "otel"
+	Name        string // "generic" | "apim" | "otel" | "kong" | "nginx"
 	DefaultKind string // "client" | "service"; "" for generic, where every row gives its own kind
 	// Parse streams r and calls emit for every record. A line or element it cannot read is skipped and counted; its
 	// content never appears in the result or the error. err is a read error, or says that the input held something
@@ -35,6 +35,8 @@ type ParseOptions struct {
 var presets = map[string]Preset{
 	"apim":    apimPreset,
 	"generic": genericPreset,
+	"kong":    kongPreset,
+	"nginx":   nginxPreset,
 	"otel":    otelPreset,
 }
 
