@@ -387,3 +387,18 @@ func TestUsage_dry_run_output_is_escaped(t *testing.T) {
 		t.Fatalf("%d posts", len(b.usagePosts))
 	}
 }
+
+// A caller name carrying a CI logging command is withheld: it is neither sent nor printed, only counted.
+func TestUsage_caller_with_ci_command_is_withheld(t *testing.T) {
+	b := newBackend(t)
+	input := "caller,service,method,path,lastSeen\nx ##vso[task.logissue]y,orders,GET,/v1/orders/1,2026-11-18\n"
+	out := b.usageRun(t, run{args: []string{"--source", "generic", "--dry-run"}, stdin: strings.NewReader(input)}, true)
+	if strings.Contains(out, "##vso") || strings.Contains(out, "logissue") ||
+		!strings.Contains(out, `"withheldRequests":1`) || !strings.Contains(out, `"rows":[]`) ||
+		!strings.Contains(out, "Requests withheld because the caller name looked personal: 1\n") {
+		t.Fatalf("out =\n%s", out)
+	}
+	if len(b.usagePosts) != 0 {
+		t.Fatalf("%d posts", len(b.usagePosts))
+	}
+}

@@ -7,6 +7,15 @@ func TestLooksPersonal(t *testing.T) {
 		name string
 		want bool
 	}{
+		// control characters and "##" (a CI logging command, a broken log line); a single "#" is fine
+		{"x ##vso[task.setvariable variable=a]b", true},
+		{"team##name", true},
+		{"a\nb", true},
+		{"a\x1bb", true},
+		{"a\tb", true},
+		{"a\rb", true},
+		{"C# service", false},
+		{"issue #12 client", false},
 		// e-mail addresses
 		{"a@b.co", true},
 		{"jane.doe@contoso.com", true},

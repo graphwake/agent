@@ -19,8 +19,13 @@ var (
 // an e-mail address, an IPv4 or IPv6 literal, a run of 32 or more hexadecimal characters (also behind a label, as in
 // "apikey=<hex>"), or a secret-like run of 32 or more characters of [A-Za-z0-9+/_=-] (not a canonical UUID; pure
 // hexadecimal, or mixing upper case, lower case and digits). Such names are never sent; their requests are only
-// counted as withheld.
+// counted as withheld. A name with a control character (newline, carriage return, tab, ESC, ...) or "##" is withheld
+// too: no real client or service name has one, and such a name could break a log line or start a CI logging command
+// ("##vso[") wherever it is printed.
 func LooksPersonal(name string) bool {
+	if strings.Contains(name, "##") || strings.IndexFunc(name, unicode.IsControl) >= 0 {
+		return true
+	}
 	if emailPattern.MatchString(name) || hexRun.MatchString(name) {
 		return true
 	}
