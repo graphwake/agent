@@ -189,6 +189,39 @@ func TestReadme_usage_flags_table_matches_the_code(t *testing.T) {
 	}
 }
 
+var (
+	helpFlag     = regexp.MustCompile(`--[a-z][a-z-]*[a-z]`)
+	helpVariable = regexp.MustCompile(`GRAPHWAKE_[A-Z_]*[A-Z]`)
+)
+
+// The help text "graphwake usage -h" prints names the same flags and variables as the code, like the README table.
+func TestUsageHelp_names_the_flags_and_variables_of_the_code(t *testing.T) {
+	flags := usageFlagNames(t)
+	helpFlags := helpFlag.FindAllString(usageHelp, -1)
+	for _, flag := range flags {
+		if !contains(helpFlags, flag) {
+			t.Errorf("the usage help text does not name %s", flag)
+		}
+	}
+	for _, flag := range helpFlags {
+		if !contains(flags, flag) {
+			t.Errorf("the usage help text names %s, which graphwake usage does not define", flag)
+		}
+	}
+	variables := usageVariableNames(t)
+	helpVariables := helpVariable.FindAllString(usageHelp, -1)
+	for _, name := range variables {
+		if !contains(helpVariables, name) {
+			t.Errorf("the usage help text does not name %s", name)
+		}
+	}
+	for _, name := range helpVariables {
+		if !contains(variables, name) {
+			t.Errorf("the usage help text names %s, which graphwake usage does not read", name)
+		}
+	}
+}
+
 func TestReadme_usage_sources_table_lists_every_preset(t *testing.T) {
 	section := readmeSection(t, readFileT(t, readmePath), "### Supported sources")
 	cells := tableColumn(section, "Source", 0)

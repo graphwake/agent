@@ -30,7 +30,10 @@ type Preset struct {
 // ParseResult is what a preset reports besides its records.
 type ParseResult struct {
 	Skipped int64 // lines or elements it could not read
-	Partial bool  // the tool said its export is incomplete (a timeout or a warning); only datadog sets it
+	// Partial: the tool said its export is incomplete, or the export was cut short. Only datadog and appinsights set
+	// it: datadog for an answer whose meta reports a status other than "done" or a warning, or an answer cut short;
+	// appinsights for an API answer (the "tables" form) with an "error" member that is not null.
+	Partial bool
 }
 
 // ParseOptions changes how a preset reads its input.

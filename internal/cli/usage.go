@@ -26,7 +26,9 @@ endpoint, how often and when last. Raw paths and personal-looking caller names s
 Presets: apim, appinsights, datadog, generic, kong, nginx, otel. "graphwake usage query" prints the query or configuration that produces the input.
 --dry-run prints the summary that would be sent and what stays on this machine, and sends nothing.
 The usage key is read from GRAPHWAKE_USAGE_KEY (--key is accepted but not recommended).
-Every flag has a GRAPHWAKE_USAGE_* environment variable (GRAPHWAKE_USAGE_SOURCE, GRAPHWAKE_USAGE_INPUT, ...).`
+Environment variables (a flag wins over its variable): GRAPHWAKE_USAGE_SOURCE, GRAPHWAKE_USAGE_INPUT,
+GRAPHWAKE_USAGE_KEY, GRAPHWAKE_URL (for --url), GRAPHWAKE_USAGE_SERVICE, GRAPHWAKE_USAGE_CALLER_FIELD,
+GRAPHWAKE_USAGE_NO_COUNTS, GRAPHWAKE_USAGE_DRY_RUN.`
 
 // usageConfig is the resolved usage configuration: flags first, then GRAPHWAKE_USAGE_* variables (the API URL:
 // GRAPHWAKE_URL).
