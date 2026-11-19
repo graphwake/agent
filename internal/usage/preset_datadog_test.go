@@ -86,16 +86,21 @@ func TestDatadog_host_and_path_fallbacks(t *testing.T) {
 		ddBucket(`"service":"d","@http.url_details.path":"/v1/orders/1","@http.method":"GET"`, "1"),
 		// The path: @http.url_details.path, else resource_name when it starts with a method and a space.
 		ddBucket(`"service":"e","@http.url_details.host":"orders.internal","resource_name":"GET /v1/orders/{id}","@http.method":"GET"`, "1"),
-		ddBucket(`"service":"f","@http.url_details.host":"orders.internal","resource_name":"post /v1/orders","@http.method":"POST"`, "1"),
-		// The method comes from @http.method only, never from resource_name: skipped.
-		ddBucket(`"service":"j","@http.url_details.host":"orders.internal","resource_name":"GET /v1/orders"`, "1"),
+		// The method: @http.method, else resource_name when it starts with a method and a space.
+		ddBucket(`"service":"f","@http.url_details.host":"orders.internal","resource_name":"post /v1/orders"`, "1"),
+		ddBucket(`"service":"j","@http.url_details.host":"orders.internal","@http.url_details.path":"/v1/orders/2","resource_name":"DELETE /v1/orders/?"`, "1"),
+		// @http.method wins over resource_name.
+		ddBucket(`"service":"l","@http.url_details.host":"orders.internal","@http.method":"PUT","resource_name":"DELETE /v1/orders/4"`, "1"),
 		// A resource name that is not "METHOD /path", and no path: skipped.
 		ddBucket(`"service":"g","resource_name":"orders.get","@http.method":"GET"`, "1"),
 		ddBucket(`"service":"h","resource_name":"FETCH /v1/orders","@http.method":"GET"`, "1"),
 		// No method anywhere: skipped.
 		ddBucket(`"service":"i","@http.url_details.path":"/v1/orders/1"`, "1"),
+		ddBucket(`"service":"m","@http.url_details.path":"/v1/orders/1","resource_name":"orders.get"`, "1"),
+		// A method alone, with no space after it, is not "a method and a space": skipped.
+		ddBucket(`"service":"k","@http.url_details.host":"orders.internal","@http.url_details.path":"/v1/orders/3","resource_name":"DELETE"`, "1"),
 	), ParseOptions{})
-	if err != nil || res.Skipped != 4 {
+	if err != nil || res.Skipped != 5 {
 		t.Fatalf("result = %+v, err = %v", res, err)
 	}
 	assertRecords(t, got, []Record{
@@ -105,37 +110,61 @@ func TestDatadog_host_and_path_fallbacks(t *testing.T) {
 		{Caller: "d", Kind: "service", Method: "GET", Host: "", Path: "/v1/orders/1", Count: 1, Day: "2026-11-19"},
 		{Caller: "e", Kind: "service", Method: "GET", Host: "orders.internal", Path: "/v1/orders/{id}", Count: 1, Day: "2026-11-19"},
 		{Caller: "f", Kind: "service", Method: "POST", Host: "orders.internal", Path: "/v1/orders", Count: 1, Day: "2026-11-19"},
+		{Caller: "j", Kind: "service", Method: "DELETE", Host: "orders.internal", Path: "/v1/orders/2", Count: 1, Day: "2026-11-19"},
+		{Caller: "l", Kind: "service", Method: "PUT", Host: "orders.internal", Path: "/v1/orders/4", Count: 1, Day: "2026-11-19"},
 	})
 }
 
-// Datadog may hold a concrete path or a template (its own quantized "?" included): the preset passes either on as it
-// is. Cutting "/orders/?" at the "?" would make it match the list endpoint instead of the item endpoint.
+// Datadog may hold a concrete path or a template. A template passes unchanged, except that a segment that is exactly
+// "?" (Datadog's placeholder for an identifier in a quantized path) becomes "{}"; a "?" inside a segment starts a query
+// string, which is cut off.
 func TestDatadog_concrete_and_template_paths_pass_through(t *testing.T) {
-	paths := []string{"/v1/orders/8812", "/v1/orders/{id}", "/v1/orders/{}", "/v1/orders/?", "/v1/orders/?/lines/?"}
-	var buckets []string
-	for _, p := range paths {
-		buckets = append(buckets, ddBucket(`"service":"checkout-web","@http.url_details.path":"`+p+`","@http.method":"GET"`, "1"))
+	cases := []struct{ in, want string }{
+		{"/v1/orders/8812", "/v1/orders/8812"},
+		{"/v1/orders/{id}", "/v1/orders/{id}"},
+		{"/v1/orders/{}", "/v1/orders/{}"},
+		{"/orders/?", "/orders/{}"},
+		{"/orders/?/items/?", "/orders/{}/items/{}"},
+		{"/orders?page=2", "/orders"},
+		{"/orders/8812?x=1", "/orders/8812"},
+		{"/orders/?/items?page=2", "/orders/{}/items"},
+		{"/orders/8812#top", "/orders/8812"},
 	}
+	var buckets []string
+	for _, c := range cases {
+		buckets = append(buckets, ddBucket(`"service":"checkout-web","@http.url_details.path":"`+c.in+`","@http.method":"GET"`, "1"))
+	}
+	// The same from resource_name.
+	buckets = append(buckets, ddBucket(`"service":"checkout-web","resource_name":"GET /orders/?/items/?"`, "1"))
 	got, res, err := ddParse(t, ddAnswer(ddDone, buckets...), ParseOptions{})
-	if err != nil || res.Skipped != 0 || len(got) != len(paths) {
+	if err != nil || res.Skipped != 0 || len(got) != len(cases)+1 {
 		t.Fatalf("records = %v, result = %+v, err = %v", got, res, err)
 	}
-	for i, p := range paths {
-		if got[i].Path != p {
-			t.Errorf("path %d = %q, want %q", i, got[i].Path, p)
+	for i, c := range cases {
+		if got[i].Path != c.want {
+			t.Errorf("%q: path = %q, want %q", c.in, got[i].Path, c.want)
 		}
 	}
+	if p := got[len(cases)].Path; p != "/orders/{}/items/{}" {
+		t.Errorf("resource_name path = %q, want /orders/{}/items/{}", p)
+	}
 
-	// A template matches the endpoint it names, a quantized "?" the item endpoint.
-	m, err := NewMatcher(Templates{Services: []Service{{ID: "svc-orders", Name: "orders", ServerURLs: []string{"https://orders.internal/v1"},
-		Endpoints: []Endpoint{{ID: "ep-get", Method: "GET", Path: "/orders/{orderId}"}, {ID: "ep-list", Method: "GET", Path: "/orders"}}}}}, "")
+	// End to end: "/orders/?" matches GET /orders/{} and not GET /orders.
+	m, err := NewMatcher(Templates{Services: []Service{{ID: "svc-orders", Name: "orders", ServerURLs: []string{"https://orders.internal"},
+		Endpoints: []Endpoint{{ID: "ep-list", Method: "GET", Path: "/orders"}, {ID: "ep-get", Method: "GET", Path: "/orders/{}"}}}}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, r := range got[:4] {
-		r.Host = "orders.internal"
-		if e, _, ok := m.Match(r); !ok || e.ID != "ep-get" {
-			t.Errorf("%s matched %q, %v; want ep-get", r.Path, e.ID, ok)
+	quantized, _, err := ddParse(t, ddAnswer(ddDone,
+		ddBucket(`"service":"checkout-web","@http.url_details.host":"orders.internal","@http.url_details.path":"/orders/?","@http.method":"GET"`, "1"),
+		ddBucket(`"service":"checkout-web","@http.url_details.host":"orders.internal","@http.url_details.path":"/orders?page=2","@http.method":"GET"`, "1"),
+	), ParseOptions{})
+	if err != nil || len(quantized) != 2 {
+		t.Fatalf("records = %v, err = %v", quantized, err)
+	}
+	for i, want := range []string{"ep-get", "ep-list"} {
+		if e, _, ok := m.Match(quantized[i]); !ok || e.ID != want {
+			t.Errorf("%s matched %q, %v; want %s", quantized[i].Path, e.ID, ok, want)
 		}
 	}
 }

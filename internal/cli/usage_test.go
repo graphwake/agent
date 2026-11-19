@@ -443,3 +443,46 @@ func TestUsage_reports_an_incomplete_export(t *testing.T) {
 		t.Fatalf("out = %q\nwant  %q", out, sent)
 	}
 }
+
+// A partial export is never silent: an incomplete export without a single request is not sent and says why, and the
+// dry run ends with a note.
+func TestUsage_partial_export_is_never_silent(t *testing.T) {
+	const bucket = `{"type":"bucket","attributes":{"by":{"service":"checkout-web","@http.url_details.host":"orders.internal",` +
+		`"@http.url_details.path":"/v1/orders/8812","@http.method":"GET"},"compute":{"c0":42}}}`
+	const note = "Note: the export was incomplete (the tool reported a timeout or a warning)."
+	b := newBackend(t)
+	for name, in := range map[string]string{
+		"timeout":  `{"data":[],"meta":{"status":"timeout"}}`,
+		"warnings": `{"data":[],"meta":{"status":"done","warnings":[{"code":"x"}]}}`,
+		"dry run":  `{"data":[],"meta":{"status":"timeout"}}`,
+	} {
+		args := []string{"--source", "datadog"}
+		if name == "dry run" {
+			args = append(args, "--dry-run")
+		}
+		out := b.usageRun(t, run{args: args, stdin: strings.NewReader(in)}, false)
+		if out != "WARNING graphwake: usage not sent: the export was incomplete (the tool reported a timeout or a warning) and held no requests" {
+			t.Errorf("%s: out = %q", name, out)
+		}
+	}
+	// An empty export that the tool did not flag keeps its own message.
+	if out := b.usageRun(t, run{args: []string{"--source", "datadog"}, stdin: strings.NewReader(`{"data":[],"meta":{"status":"done"}}`)}, false); out !=
+		"WARNING graphwake: usage not sent: no input (give --input or pipe a file)" {
+		t.Errorf("complete empty export: out = %q", out)
+	}
+
+	out := b.usageRun(t, run{args: []string{"--source", "datadog", "--dry-run"},
+		stdin: strings.NewReader(`{"data":[` + bucket + `],"meta":{"status":"timeout"}}`)}, true)
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	if lines[0] != "--- would send ---" || lines[len(lines)-1] != note || strings.Count(out, note) != 1 {
+		t.Fatalf("out =\n%s", out)
+	}
+	out = b.usageRun(t, run{args: []string{"--source", "datadog", "--dry-run"},
+		stdin: strings.NewReader(`{"data":[` + bucket + `],"meta":{"status":"done"}}`)}, true)
+	if strings.Contains(out, "Note:") {
+		t.Fatalf("complete export: out =\n%s", out)
+	}
+	if len(b.usagePosts) != 0 {
+		t.Fatalf("%d posts", len(b.usagePosts))
+	}
+}

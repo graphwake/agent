@@ -35,7 +35,7 @@ const (
 	datadogCaller   = "service"
 	datadogMethod   = "@http.method"
 	datadogPath     = "@http.url_details.path"
-	datadogResource = "resource_name" // "GET /orders/{id}": the path when there is no path facet
+	datadogResource = "resource_name" // "GET /orders/{id}": the path when there is no path facet, the method when there is no method facet
 )
 
 var datadogHosts = []string{"@http.url_details.host", "@out.host", "@peer.hostname"}
@@ -143,8 +143,7 @@ func datadogIncomplete(raw json.RawMessage) bool {
 	return meta.Status != nil && !strings.EqualFold(strings.TrimSpace(*meta.Status), "done") || len(meta.Warnings) > 0
 }
 
-// datadogRecord reads one bucket. The path is passed on as it is (no query string to drop): it may be a concrete path
-// or a template, and a template such as "/orders/?" must keep its "?".
+// datadogRecord reads one bucket. The path may be a concrete path or a template; see datadogPath.
 func datadogRecord(raw json.RawMessage, callerField, day string) (Record, bool) {
 	var b struct {
 		Attributes struct {
@@ -162,9 +161,14 @@ func datadogRecord(raw json.RawMessage, callerField, day string) (Record, bool) 
 			break
 		}
 	}
-	if r.Path = by.field(datadogPath); r.Path == "" {
-		r.Path = resourcePath(by.field(datadogResource))
+	resourceMethod, resourcePath := splitResource(by.field(datadogResource))
+	if r.Method == "" {
+		r.Method = resourceMethod
 	}
+	if r.Path = by.field(datadogPath); r.Path == "" {
+		r.Path = resourcePath
+	}
+	r.Path = placeholderPath(r.Path)
 	count, ok := b.Attributes.Compute.get("c0")
 	if by.bad || !ok || r.Method == "" || !strings.HasPrefix(r.Path, "/") {
 		return Record{}, false
@@ -175,14 +179,37 @@ func datadogRecord(raw json.RawMessage, callerField, day string) (Record, bool) 
 	return r, true
 }
 
-// resourcePath returns the path of a resource name such as "GET /orders/{id}", or "" unless it is an HTTP method, a
-// space and a path.
-func resourcePath(resource string) string {
-	method, path, found := strings.Cut(resource, " ")
-	if path = strings.TrimSpace(path); !found || !httpMethods[strings.ToUpper(method)] || !strings.HasPrefix(path, "/") {
-		return ""
+// splitResource reads a resource name such as "GET /orders/{id}". method is the upper-case HTTP method it starts with,
+// followed by a space ("" otherwise); path is what follows the method when it starts with "/" ("" otherwise).
+func splitResource(resource string) (method, path string) {
+	m, rest, found := strings.Cut(strings.TrimSpace(resource), " ")
+	if m = strings.ToUpper(m); !found || !httpMethods[m] {
+		return "", ""
 	}
-	return path
+	if rest = strings.TrimSpace(rest); strings.HasPrefix(rest, "/") {
+		path = rest
+	}
+	return m, path
+}
+
+// placeholderPath normalizes a Datadog path. Datadog replaces identifiers with "?" in quantized paths, so a segment
+// that is exactly "?" is a placeholder: it becomes "{}", a normalized template segment the matcher takes as matching
+// a template parameter ("/orders/?" becomes "/orders/{}"). A "?" or "#" inside a segment starts a query string or a
+// fragment, which is cut off as in every other preset ("/orders?page=2" becomes "/orders").
+func placeholderPath(path string) string {
+	segs := strings.Split(path, "/")
+	for i, seg := range segs {
+		if seg == "?" {
+			segs[i] = "{}"
+			continue
+		}
+		if j := strings.IndexAny(seg, "?#"); j >= 0 {
+			segs[i] = seg[:j]
+			segs = segs[:i+1]
+			break
+		}
+	}
+	return strings.Join(segs, "/")
 }
 
 // wholeCount reads a count that must be a whole number of at least one, written as an integer or as a float.

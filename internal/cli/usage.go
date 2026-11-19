@@ -186,6 +186,9 @@ func usageSend(args []string, d Deps) int {
 	}
 	if cfg.DryRun {
 		usage.RenderDryRun(d.Out, s.body, s.unmatched, s.snap.WithheldRequests, s.snap.AnonymousRequests)
+		if s.partial {
+			io.WriteString(d.Out, "Note: the export was incomplete ("+partialReason+").\n")
+		}
 		return 0
 	}
 	sendSummary(ctx, r, s, newUsageClient(cfg, d, platform))
@@ -248,6 +251,10 @@ func buildSummary(ctx context.Context, r *report.Reporter, cfg usageConfig, pres
 		agg.Add(rec)
 	})
 	s.skipped, s.partial = parsed.Skipped, parsed.Partial
+	if s.partial && records == 0 {
+		r.Warn("usage not sent: the export was incomplete (%s) and held no requests", partialReason)
+		return s, false
+	}
 	if err != nil {
 		r.Warn("usage not sent: the input could not be read")
 		return s, false
@@ -296,6 +303,9 @@ func sendSummary(ctx context.Context, r *report.Reporter, s summary, client *usa
 }
 
 const noInput = "no input (give --input or pipe a file)"
+
+// partialReason is why an export counts as incomplete; a fixed sentence, never input data.
+const partialReason = "the tool reported a timeout or a warning"
 
 // openUsageInput opens the --input file, else standard input when something is piped into it. A terminal is no
 // input: reading it would wait for typing. problem is the warning when there is nothing to read; the path is never
@@ -355,7 +365,7 @@ func usageNotes(snap usage.Snapshot, skipped, notAccepted int64, partial bool) s
 		b.WriteString(fmt.Sprintf(" %d rows were not accepted.", notAccepted))
 	}
 	if partial {
-		b.WriteString(" The export was incomplete (the tool reported a timeout or a warning).")
+		b.WriteString(" The export was incomplete (" + partialReason + ").")
 	}
 	return b.String()
 }
