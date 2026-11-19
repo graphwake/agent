@@ -503,9 +503,9 @@ graphwake upload --spec http://localhost:5000/swagger/v1/swagger.json
 `graphwake usage` reads a gateway log or trace export and sends Graphwake a summary: which caller used which
 endpoint, how many times and on which day last. It reads one file or standard input, runs wherever you run it (a
 scheduled CI job or any scheduler) and connects to nothing but Graphwake. The summary holds the caller name, the
-endpoint as a path template, the call count and the last-seen day; request and response bodies, query strings and IP
-addresses are never part of it. `--dry-run` prints the summary it would send, and says so when nothing would be
-sent.
+endpoint as a path template, the call count and the last-seen day. Other than the one value you choose as the caller
+name, nothing from a request is sent: no body, header, query string or IP address. `--dry-run` prints the summary it
+would send, and says so when nothing would be sent.
 
 Optional. Without it, Graphwake still needs only your spec.
 
@@ -612,8 +612,8 @@ NGINX format that `graphwake usage query --source nginx` prints fills `caller` f
 (`$http_x_client_id`), and Kong's `--caller-field` can name a header such as `request.headers.x-client-id`.
 
 The caller name is whatever that field holds, so point the caller field at a field that names the application (a
-subscription, a consumer, a service). A value that looks like personal data, a secret, a path or a URL is withheld
-(below); a host name or a status code is not, if the caller field names one.
+subscription, a consumer, a service). A value that matches one of the rules below is withheld; any other value is
+sent as it is, such as a host name or a status code if the caller field names one.
 
 Also never sent: the caller names of requests that matched no endpoint, the table of unmatched requests by host and
 path prefix (printed by `--dry-run` only), and the content of lines that could not be read.
@@ -622,8 +622,9 @@ path prefix (printed by `--dry-run` only), and the content of lines that could n
 `withheldRequests`:
 
 - it contains an e-mail address, such as `jane@contoso.com`;
-- it contains an IPv4 or IPv6 address, also with a port or inside a host name: `10.0.0.12:8080`,
-  `10.0.0.12.nip.io`, `2001:db8::1`;
+- it contains an IPv4 or IPv6 address in its standard written form, also with a port or inside a host name:
+  `10.0.0.12:8080`, `10.0.0.12.nip.io`, `2001:db8::1` (other ways of writing an address, such as `010.0.0.12`
+  with a leading zero, are not caught);
 - it contains a secret-like run of 32 or more letters, digits and `+/_=-` that is pure hexadecimal or mixes
   upper-case letters, lower-case letters and digits, such as `dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk` (a
   canonical UUID such as `550e8400-e29b-41d4-a716-446655440000` is not withheld);
@@ -634,7 +635,10 @@ path prefix (printed by `--dry-run` only), and the content of lines that could n
 - it looks like a path or a URL: without surrounding spaces it starts with `/`, or it contains `://` or `?`, or
   one of its words (separated by white space) starts with `/` and is longer than one character:
   `/v1/orders/8812?token=abc`, `https://orders.example/a`, `orders?page=2`, `GET /v1/orders/8812` (`team/app` and
-  `Checkout / Web` are not withheld).
+  `Checkout / Web` are not withheld);
+- it looks like structured content, such as a JSON or XML body or a `key=value` query string: it contains any of
+  `{`, `}`, `"`, `<`, `>` or `=`: `{"card":"4111"}`, `page=2&token=abc`, `<order id="1">` (`&` alone is allowed, so
+  `R&D team` is not withheld).
 
 **Limits.** With more distinct callers (caller name and kind pairs) than the caller limit (2,000, unless the
 endpoint list Graphwake sends sets another), nothing is sent: so many names usually mean the caller field names end

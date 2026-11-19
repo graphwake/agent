@@ -54,6 +54,12 @@ func TestLooksPersonal(t *testing.T) {
 		{"POST /orders", true},
 		{"orders /v1/x", true},
 		{"Checkout / Web", false},
+		// structured content: any of { } " < > = (a JSON or XML body, a key=value query string); "&" is allowed
+		{`{"card":"4111"}`, true},
+		{"page=2&token=abc", true},
+		{`<order id="1">`, true},
+		{"a=b", true},
+		{"R&D team", false},
 		// ordinary caller names
 		{"checkout-web", false},
 		{"master", false},

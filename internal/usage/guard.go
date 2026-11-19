@@ -22,12 +22,13 @@ var (
 // counted as withheld. A name with a control character (newline, carriage return, tab, ESC, ...) or "##" is withheld
 // too: no real client or service name has one, and such a name could break a log line or start a CI logging command
 // ("##vso[") wherever it is printed. A name that looks like a path or a URL is withheld as well (see looksLikePath): a
-// caller field pointed at a request path must not send that path or its query string.
+// caller field pointed at a request path must not send that path or its query string. So is a name that looks like
+// structured content (see looksStructured): a caller field pointed at a body or a query string must not send it.
 func LooksPersonal(name string) bool {
 	if strings.Contains(name, "##") || strings.IndexFunc(name, unicode.IsControl) >= 0 {
 		return true
 	}
-	if looksLikePath(name) {
+	if looksLikePath(name) || looksStructured(name) {
 		return true
 	}
 	if emailPattern.MatchString(name) || hexRun.MatchString(name) {
@@ -55,6 +56,16 @@ func looksLikePath(name string) bool {
 		}
 	}
 	return false
+}
+
+// structuredChars are the characters of JSON and XML text and of key=value pairs. "&" is not one: names such as
+// "R&D" have it.
+const structuredChars = `{}"<>=`
+
+// looksStructured reports whether a caller name looks like structured content (a JSON or XML body, a key=value query
+// string): it contains any of { } " < > =.
+func looksStructured(name string) bool {
+	return strings.ContainsAny(name, structuredChars)
 }
 
 // looksRandom tells a secret from a long service name: a secret is pure hexadecimal or mixes upper-case letters,

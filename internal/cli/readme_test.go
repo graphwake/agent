@@ -287,10 +287,14 @@ var withheldProbes = []string{
 	"https://orders.example/a",  // contains "://"
 	"orders?page=2",             // contains "?"
 	"GET /v1/orders/8812",       // a word that starts with "/"
+	`{"card":"4111"}`,           // structured content: { } "
+	"page=2&token=abc",          // structured content: =
+	`<order id="1">`,            // structured content: < >
 }
 
 // notWithheldExamples are the names the README's list shows as not withheld; the guard must agree.
-var notWithheldExamples = []string{"550e8400-e29b-41d4-a716-446655440000", "team/app", "Checkout / Web"}
+var notWithheldExamples = []string{"550e8400-e29b-41d4-a716-446655440000", "team/app", "Checkout / Web", "R&D team",
+	"010.0.0.12"}
 
 func TestReadme_withheld_name_list_has_every_rule(t *testing.T) {
 	section := readmeSection(t, readFileT(t, readmePath), "### What the usage step sends")

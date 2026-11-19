@@ -571,3 +571,24 @@ func TestUsage_method_prefixed_path_as_caller_is_withheld(t *testing.T) {
 		t.Fatalf("%d posts", len(b.usagePosts))
 	}
 }
+
+// A caller field that names a request body (here an NGINX log member request_body) is withheld: the body text never
+// reaches the summary or the output.
+func TestUsage_body_as_caller_is_withheld(t *testing.T) {
+	b := newBackend(t)
+	input := `{"time":"2026-11-18T10:00:00+00:00","method":"GET","host":"orders.internal","path":"/v1/orders/8812",` +
+		`"caller":"checkout-web","request_body":"{\"card\":\"4111111111111111\",\"cvc\":\"123\"}"}` + "\n"
+	out := b.usageRun(t, run{args: []string{"--source", "nginx", "--caller-field", "request_body", "--dry-run"},
+		stdin: strings.NewReader(input)}, true)
+	if !strings.Contains(out, `"withheldRequests":1`) || !strings.Contains(out, `"rows":[]`) {
+		t.Fatalf("out =\n%s", out)
+	}
+	for _, leak := range []string{"card", "4111", "cvc"} {
+		if strings.Contains(out, leak) {
+			t.Fatalf("output contains %q:\n%s", leak, out)
+		}
+	}
+	if len(b.usagePosts) != 0 {
+		t.Fatalf("%d posts", len(b.usagePosts))
+	}
+}
