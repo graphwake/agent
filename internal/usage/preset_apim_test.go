@@ -1,0 +1,37 @@
+package usage
+
+import "testing"
+
+func TestApim_log_analytics_output(t *testing.T) {
+	assertRecords(t, parseFixture(t, "apim", "apim-log-analytics.json", ParseOptions{}), []Record{
+		{Caller: "checkout-web", Kind: "client", Method: "GET", Host: "gateway.example", Path: "/orders/v1/orders/8812", API: "orders-api", Count: 42, Day: "2026-11-18"},
+		{Caller: "", Kind: "client", Method: "POST", Host: "gateway.example", Path: "/orders/v1/orders", API: "orders-api", Count: 7, Day: "2026-11-17"},
+		{Caller: "partner-portal", Kind: "client", Method: "GET", Host: "", Path: "/inventory/items", API: "", Count: 1, Day: "2026-11-16"},
+	})
+
+	// A path that still carries a query string (a hand-written query without parse_url) loses it, and an empty
+	// subscription id is anonymous like "None".
+	in := `[{"ApimSubscriptionId":"","ApiId":"orders-api","Method":"GET","Host":"gateway.example","Path":"/orders/v1/orders/8812?token=abc#x","Calls":"3","LastSeen":"2026-11-18T09:12:44Z","TableName":"PrimaryResult"}]`
+	got, skipped, err := parse(t, "apim", in, ParseOptions{})
+	if err != nil || skipped != 0 {
+		t.Fatalf("skipped = %d, err = %v", skipped, err)
+	}
+	assertRecords(t, got, []Record{{Kind: "client", Method: "GET", Host: "gateway.example", Path: "/orders/v1/orders/8812", API: "orders-api", Count: 3, Day: "2026-11-18"}})
+}
+
+func TestApim_caller_field_override(t *testing.T) {
+	in := `[
+  {"ApimSubscriptionId":"master","CallerApp":"checkout-web","ApiId":"orders-api","Method":"GET","Host":"gateway.example","Path":"/orders/1","Calls":"2","LastSeen":"2026-11-18T09:12:44Z","TableName":"PrimaryResult"},
+  {"ApimSubscriptionId":"master","CallerApp":"None","ApiId":"orders-api","Method":"GET","Host":"gateway.example","Path":"/orders/2","Calls":"1","LastSeen":"2026-11-18T09:12:44Z","TableName":"PrimaryResult"},
+  {"ApimSubscriptionId":"master","ApiId":"orders-api","Method":"GET","Host":"gateway.example","Path":"/orders/3","Calls":"1","LastSeen":"2026-11-18T09:12:44Z","TableName":"PrimaryResult"}
+]`
+	got, skipped, err := parse(t, "apim", in, ParseOptions{CallerField: "CallerApp"})
+	if err != nil || skipped != 0 || len(got) != 3 {
+		t.Fatalf("records = %v, skipped = %d, err = %v", got, skipped, err)
+	}
+	for i, want := range []string{"checkout-web", "", ""} {
+		if got[i].Caller != want {
+			t.Errorf("row %d caller = %q, want %q", i, got[i].Caller, want)
+		}
+	}
+}

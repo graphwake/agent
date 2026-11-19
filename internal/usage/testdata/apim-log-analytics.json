@@ -1,0 +1,32 @@
+[
+  {
+    "ApimSubscriptionId": "checkout-web",
+    "ApiId": "orders-api",
+    "Method": "GET",
+    "Host": "gateway.example",
+    "Path": "/orders/v1/orders/8812",
+    "Calls": "42",
+    "LastSeen": "2026-11-18T09:12:44.1234567Z",
+    "TableName": "PrimaryResult"
+  },
+  {
+    "ApimSubscriptionId": "None",
+    "ApiId": "orders-api",
+    "Method": "post",
+    "Host": "Gateway.Example:443",
+    "Path": "/orders/v1/orders",
+    "Calls": "7",
+    "LastSeen": "2026-11-17T23:59:59.9999999Z",
+    "TableName": "PrimaryResult"
+  },
+  {
+    "ApimSubscriptionId": "partner-portal",
+    "ApiId": "None",
+    "Method": "GET",
+    "Host": "None",
+    "Path": "/inventory/items",
+    "Calls": "1",
+    "LastSeen": "2026-11-16T14:00:00Z",
+    "TableName": "PrimaryResult"
+  }
+]

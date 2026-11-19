@@ -1,0 +1,6 @@
+[
+  {"caller": "checkout-web", "callerKind": "client", "service": "orders", "method": "GET", "path": "/v1/orders/8812?token=abc", "count": 42, "lastSeen": "2026-11-17"},
+  {"caller": "billing-worker", "callerKind": "Service", "service": "orders", "method": "post", "path": "/v1/orders", "count": "", "lastSeen": "2026-11-18T09:12:44.1234567Z"},
+  {"caller": "mobile app, ios", "callerKind": "client", "service": null, "method": "GET", "path": "/orders/{}", "count": "3", "lastSeen": "2026-11-16"},
+  {"caller": "", "callerKind": "client", "service": "orders", "method": "GET", "path": "/v1/orders/77", "count": 5, "lastSeen": "2026-11-15"}
+]
