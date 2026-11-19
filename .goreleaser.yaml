@@ -1,5 +1,5 @@
 # GoReleaser v2 configuration for the graphwake CI agent.
-# Run from this folder (agent/). Releases are tagged vX.Y.Z; see release/github-workflow.yml.
+# Run from the repository root. Releases are tagged vX.Y.Z; see release/github-workflow.yml.
 version: 2
 
 project_name: graphwake

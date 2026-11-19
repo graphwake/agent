@@ -3,7 +3,7 @@
 # Include this file and extend the hidden job:
 #
 #   include:
-#     - remote: https://raw.githubusercontent.com/graphwake/agent/v0.2.0/gitlab/graphwake.gitlab-ci.yml
+#     - remote: https://raw.githubusercontent.com/graphwake/agent/v0.3.0/gitlab/graphwake.gitlab-ci.yml
 #
 #   graphwake:
 #     extends: .graphwake-upload
@@ -19,7 +19,7 @@
 
 .graphwake-upload:
   image:
-    name: ghcr.io/graphwake/agent:0.2.0
+    name: ghcr.io/graphwake/agent:0.3.0
     entrypoint: [""]
   stage: deploy
   variables:

@@ -109,7 +109,7 @@ async function main() {
     warn("unsupported agent platform " + process.platform + "/" + process.arch + ", spec not sent");
     return 0;
   }
-  const version = (input("agentVersion") || "0.2.0").replace(/^v/, "");
+  const version = (input("agentVersion") || "0.3.0").replace(/^v/, "");
   const ext = goos === "windows" ? "zip" : "tar.gz";
   const bin = goos === "windows" ? "graphwake.exe" : "graphwake";
   const archive = `graphwake_${version}_${goos}_${goarch}.${ext}`;

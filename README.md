@@ -13,10 +13,14 @@ it runs in pull request builds and in default-branch builds and works out which 
 - **Anything else** (feature branches, tags, unknown CI): nothing is sent.
 
 The agent **never fails your pipeline unless you turn on `--fail-on`**. Without it the exit code is always 0. It
-prints exactly one line: what was sent, why nothing was sent, or a warning in your CI's warning format. The ingest
-key and the CI token are never printed.
+prints exactly one line: what was sent, why nothing was sent, or a warning in your CI's warning format. Two
+commands print several lines: `graphwake usage --dry-run` and `graphwake usage query` (and so does `-h`, the help
+text). The ingest key, the usage key and the CI token are never printed.
 
 The agent sends the spec as is (YAML or JSON); it does not generate it. See [Producing the spec](#producing-the-spec).
+
+The agent has a second command, `graphwake usage`, for Usage Discovery: it reads a gateway log or trace export and
+sends a summary of which caller used which endpoint. See [Usage Discovery](#usage-discovery-graphwake-usage).
 
 Try the check in your browser first: https://graphwake.com/tools/openapi-diff
 
@@ -24,16 +28,16 @@ Try the check in your browser first: https://graphwake.com/tools/openapi-diff
 
 | Where | How |
 |---|---|
-| GitHub Actions | `uses: graphwake/agent/github-action@v0.2.0` ([snippet](#github-actions)) |
+| GitHub Actions | `uses: graphwake/agent/github-action@v0.3.0` ([snippet](#github-actions)) |
 | GitLab CI | include `gitlab/graphwake.gitlab-ci.yml` ([snippet](#gitlab-ci)) |
 | Azure DevOps | the `GraphwakeUpload` task ([snippet](#azure-devops)) |
-| Jenkins, Bitbucket, anything else | the Docker image `ghcr.io/graphwake/agent:0.2.0` or the binary |
+| Jenkins, Bitbucket, anything else | the Docker image `ghcr.io/graphwake/agent:0.3.0` or the binary |
 
 Binaries for Linux, macOS and Windows (amd64 and arm64) are on the
 [releases page](https://github.com/graphwake/agent/releases), with a `checksums.txt`:
 
 ```sh
-VERSION=0.2.0
+VERSION=0.3.0
 BASE=https://github.com/graphwake/agent/releases/download/v$VERSION
 ARCHIVE=graphwake_${VERSION}_linux_amd64.tar.gz
 curl -fsSLO "$BASE/$ARCHIVE" && curl -fsSLO "$BASE/checksums.txt" &&
@@ -180,6 +184,8 @@ re-run sees a label added later.
 | 1 | Only with `--fail-on`, on an open pull request build on GitHub or Azure Repos, when Graphwake's check result is "failed". The comment is written first. |
 | 0 | Everything else: the spec was sent, nothing was sent, any warning. |
 
+`graphwake usage` never returns a non-zero code; see [Output and exit code](#output-and-exit-code).
+
 These never fail the build, with or without `--fail-on`; each is a warning:
 
 - Graphwake cannot be reached, times out, or rejects the request (invalid key, account closed, invalid spec).
@@ -234,7 +240,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # ... build and produce openapi.json (see "Producing the spec")
-      - uses: graphwake/agent/github-action@v0.2.0
+      - uses: graphwake/agent/github-action@v0.3.0
         with:
           spec: openapi.json
           key: ${{ secrets.GRAPHWAKE_KEY }}
@@ -262,7 +268,7 @@ are sent too), so the comment fails with a warning.
 
 ```yaml
 include:
-  - remote: https://raw.githubusercontent.com/graphwake/agent/v0.2.0/gitlab/graphwake.gitlab-ci.yml
+  - remote: https://raw.githubusercontent.com/graphwake/agent/v0.3.0/gitlab/graphwake.gitlab-ci.yml
 
 graphwake:
   extends: .graphwake-upload
@@ -317,7 +323,7 @@ Without the extension, run the binary from a script step:
 
 ```yaml
   - bash: |
-      VERSION=0.2.0
+      VERSION=0.3.0
       BASE=https://github.com/graphwake/agent/releases/download/v$VERSION
       ARCHIVE=graphwake_${VERSION}_linux_amd64.tar.gz
       curl -fsSLO "$BASE/$ARCHIVE" && curl -fsSLO "$BASE/checksums.txt" &&
@@ -340,7 +346,7 @@ still keeps the step green:
 
 ```yaml
   - bash: |
-      VERSION=0.2.0
+      VERSION=0.3.0
       BASE=https://github.com/graphwake/agent/releases/download/v$VERSION
       ARCHIVE=graphwake_${VERSION}_linux_amd64.tar.gz
       if curl -fsSLO "$BASE/$ARCHIVE" && curl -fsSLO "$BASE/checksums.txt" &&
@@ -371,7 +377,7 @@ its behaviour.
 stage('API spec') {
   steps {
     withCredentials([string(credentialsId: 'graphwake-key', variable: 'GRAPHWAKE_KEY')]) {
-      sh 'docker run --rm -e GRAPHWAKE_KEY -e BRANCH_NAME -e CHANGE_ID -e CHANGE_URL -e CHANGE_AUTHOR -e GIT_COMMIT -e JENKINS_URL -v "$PWD:/w" -w /w ghcr.io/graphwake/agent:0.2.0 upload --spec openapi.json || true'
+      sh 'docker run --rm -e GRAPHWAKE_KEY -e BRANCH_NAME -e CHANGE_ID -e CHANGE_URL -e CHANGE_AUTHOR -e GIT_COMMIT -e JENKINS_URL -v "$PWD:/w" -w /w ghcr.io/graphwake/agent:0.3.0 upload --spec openapi.json || true'
     }
   }
 }
@@ -394,7 +400,7 @@ definitions:
         script:
           - ./build-openapi.sh   # produce openapi.json
           - >-
-            VERSION=0.2.0; BASE=https://github.com/graphwake/agent/releases/download/v$VERSION;
+            VERSION=0.3.0; BASE=https://github.com/graphwake/agent/releases/download/v$VERSION;
             ARCHIVE=graphwake_${VERSION}_linux_amd64.tar.gz;
             (curl -fsSLO "$BASE/$ARCHIVE" && curl -fsSLO "$BASE/checksums.txt" &&
             sha256sum --check --ignore-missing checksums.txt && tar -xzf "$ARCHIVE" graphwake &&
@@ -491,6 +497,271 @@ accepted).
 ./start-my-api &           # or docker run -d -p 5000:8080 my-api
 graphwake upload --spec http://localhost:5000/swagger/v1/swagger.json
 ```
+
+## Usage Discovery (graphwake usage)
+
+`graphwake usage` reads a gateway log or trace export and sends Graphwake a summary: which caller used which
+endpoint, how many times and on which day last. It reads one file or standard input, runs wherever you run it (a
+scheduled CI job or any scheduler) and connects to nothing but Graphwake. Raw paths, query strings and
+personal-looking caller names stay on that machine, and `--dry-run` prints exactly what would be sent.
+
+Optional. Without it, Graphwake still needs only your spec.
+
+The step needs a usage key (`GRAPHWAKE_USAGE_KEY`), which belongs to one usage source in Graphwake. `GRAPHWAKE_KEY`,
+the key `upload` uses, is a different key. A run:
+
+1. fetches the endpoint list of the key's usage source: `GET /api/ingest/usage/templates` returns the services,
+   their server URLs and endpoint templates, the mappings set in Graphwake and the limits;
+2. reads the input with the preset and matches every request to an endpoint template, on this machine;
+3. sends the summary: `POST /api/ingest/usage`. With `--dry-run` it prints the summary instead and sends nothing.
+
+A request finds its endpoint in this order: a mapping set in Graphwake (host, path prefix, API name; the one with
+the most of them wins), else the host of a service's server URL, else the service the input names (`generic`) or
+`--service`. The method and the path, segment by segment, then pick the endpoint template. A request that matches
+no endpoint is only counted.
+
+### Supported sources
+
+| Source | Tool | Also accepted | Input | Caller name (kind) | `--caller-field` names |
+|---|---|---|---|---|---|
+| `apim` | Azure API Management | `azure-apim`, `api-management` | The JSON that `az monitor log-analytics query -o json` writes for the printed query over `ApiManagementGatewayLogs` (requests of the last 7 days, grouped). | The subscription, `ApimSubscriptionId` (`client`). | A column of the result. |
+| `appinsights` | Azure Application Insights | `app-insights`, `applicationinsights`, `application-insights` | The JSON that `az monitor log-analytics query -o json` writes for the printed query over `AppDependencies` (outgoing HTTP calls of the last 7 days, grouped; workspace-based Application Insights). The answer of `az monitor app-insights query` (classic column names) is read too. | The calling service, `AppRoleName`, else `cloud_RoleName` (`service`). | A column of the result. |
+| `datadog` | Datadog APM | `dd` | The answers of the spans aggregate API (`POST /api/v2/spans/analytics/aggregate`) that the printed `curl` call appends to one file, one call per calling service. | The calling service, the `service` facet (`service`). | A facet of the bucket's `by`. |
+| `generic` | Any other tool | `csv`, `json` | CSV with a header line, a JSON array of objects or one JSON object per line, with the columns `caller,callerKind,service,method,path,count,lastSeen`. | The `caller` column (`callerKind`: `client` or `service`, default `client`). | A column. |
+| `kong` | Kong | | The file-log plugin's log (one JSON object per line) or an http-log batch (a JSON array). | The consumer: `consumer.username`, else `custom_id`, else `id` (`client`). | A dotted path, such as `consumer.custom_id` or `request.headers.x-client-id`. |
+| `nginx` | NGINX | | An access log written in the JSON log format the printed configuration adds (one JSON object per line). | The `caller` member, which that format fills from the `X-Client-Id` request header (`client`). | A member of the log line. |
+| `otel` | OpenTelemetry | `opentelemetry`, `otlp` | The OpenTelemetry Collector file exporter's OTLP JSON (one object per line), with the printed Collector configuration, which keeps the HTTP client spans. | The calling service, the resource attribute `service.name` (`service`). | A resource attribute. |
+
+"The printed query" is what `graphwake usage query --source <preset>` prints: the query, the API call or the
+configuration that produces the input (for `generic`, the header line and one example line). It needs no key and
+makes no network call. Source names ignore letter case.
+
+- `apim`, `appinsights`, `datadog` and `generic` read request counts from the input: `Calls` in `apim` and
+  `appinsights`, the `c0` count in `datadog`, `count` in `generic` (empty: one request). In `kong`, `nginx` and
+  `otel` every line or span is one request.
+- `datadog`: the answers carry no dates, so every request gets the day the step runs (UTC).
+- `kong` reads only `consumer`, `request.method`, `request.uri`, `request.headers.host` (or the host in
+  `request.url`), `started_at` and the `--caller-field` path of an entry; every other member is skipped unread.
+- `otel` reads only client spans with an HTTP method, a path and a start time; other spans are not counted.
+- In `generic`, `service` is the Graphwake service name and `path` is a concrete path or a template such as
+  `/orders/{id}`. A query string is dropped in every preset.
+- A line or element a preset cannot read is skipped and counted; its content is never printed.
+
+### Flags and environment
+
+A flag wins over the variable. The two switches take `true`, `1`, `yes` or `on` in the variable.
+
+| Flag | Variable | Meaning |
+|---|---|---|
+| `--source` | `GRAPHWAKE_USAGE_SOURCE` | The preset or one of its other names (see [Supported sources](#supported-sources)). Required. |
+| `--input` | `GRAPHWAKE_USAGE_INPUT` | The file to read. Default: standard input, when something is piped into it (a terminal is not read). |
+| `--key` | `GRAPHWAKE_USAGE_KEY` | The usage key. Required, also for `--dry-run`. Use the variable from a CI secret; the flag is accepted but shows up in process lists. |
+| `--url` | `GRAPHWAKE_URL` | Graphwake API URL, the same variable `upload` reads. Default `https://api.graphwake.com`. |
+| `--service` | `GRAPHWAKE_USAGE_SERVICE` | The Graphwake service a request belongs to when no mapping, no server URL host and no `service` column decides it. It must name a service in the endpoint list. Default: none. |
+| `--caller-field` | `GRAPHWAKE_USAGE_CALLER_FIELD` | The field that names the caller (see the last column of [Supported sources](#supported-sources)). Default: the preset's. |
+| `--no-counts` | `GRAPHWAKE_USAGE_NO_COUNTS=true` | Send no request counts: the rows have no `count` and `countsIncluded` is `false`. Default: off, counts are sent. |
+| `--dry-run` | `GRAPHWAKE_USAGE_DRY_RUN=true` | Fetch the endpoint list, build the summary and print it with what stays on this machine. Nothing is sent. Default: off. |
+
+`graphwake usage -h` prints the help.
+
+### What the usage step sends
+
+The agent makes two requests, both to the Graphwake API URL: `GET /api/ingest/usage/templates` and
+`POST /api/ingest/usage`. With `--dry-run` it makes only the first. The agent sets the headers
+`Authorization: Bearer <usage key>`, `Accept: application/json` and
+`User-Agent: graphwake-agent/<version> (<CI platform>)`, and `Content-Type: application/json` on the POST. A request
+is tried up to 3 times on a network error or HTTP 503, for at most 30 seconds in all.
+
+The POST body is the summary, and the summary has these fields and no others:
+
+| Field | What it holds |
+|---|---|
+| `preset` | The preset's name, such as `apim`. |
+| `agentVersion` | The agent's version. |
+| `windowStart` | The earliest day (UTC, `YYYY-MM-DD`) of the requests read. |
+| `windowEnd` | The latest day of the requests read. |
+| `countsIncluded` | `false` with `--no-counts`. |
+| `unmatchedRequests` | How many requests matched no endpoint. A number only. |
+| `withheldRequests` | How many requests had a withheld caller name. A number only. |
+| `anonymousRequests` | How many requests had no caller name. A number only. |
+| `rows` | One row per caller, caller kind and endpoint, with the fields below. |
+
+| Field | What it holds |
+|---|---|
+| `caller` | The caller name as the input gives it, cut to 200 characters. Never a withheld name. |
+| `callerKind` | `client` (a client of the gateway) or `service` (a service that calls another). |
+| `endpointId` | The endpoint's id, from the endpoint list Graphwake sent. |
+| `service` | The service's name, from that list. |
+| `method` | The endpoint's method, from that list. |
+| `path` | The endpoint's path template from that list, every parameter written `{}`, such as `/orders/{}`. Never the raw path. |
+| `count` | The number of requests. Left out with `--no-counts`. It stops at the largest 64-bit integer instead of overflowing. |
+| `lastSeen` | The latest day (UTC) the caller used the endpoint. |
+
+Never sent: raw paths and query strings; hosts and API names, which may be IP addresses (they only find the
+endpoint, on this machine); request and response bodies and status codes (no preset reads them); caller names that
+contain an IP address (they are withheld, see below); the caller names of unmatched requests; withheld caller names; the table of unmatched requests by host and path prefix (printed by `--dry-run` only); the
+content of lines that could not be read. Header values: no header value is sent except the one you choose as the
+caller name. The NGINX format that `graphwake usage query --source nginx` prints fills `caller` from the
+`X-Client-Id` header (`$http_x_client_id`), and Kong's `--caller-field` can name a header such as
+`request.headers.x-client-id`.
+
+**Withheld caller names.** A caller name is withheld when it contains any of these; its requests are only counted in
+`withheldRequests`:
+
+- an e-mail address;
+- an IPv4 or IPv6 address, also with a port or inside a host name (`10.0.0.12:8080`, `10.0.0.12.nip.io`);
+- a secret-like run of 32 or more letters, digits and `+/_=-` that mixes upper-case letters, lower-case letters
+  and digits (a canonical UUID is not withheld);
+- any run of 32 or more hexadecimal characters, also behind a label such as `apikey=`;
+- a control character (a newline, a carriage return, a tab, ESC);
+- the sequence `##`.
+
+**Limits.** With more distinct callers than the caller limit (2,000, unless the endpoint list Graphwake sends sets
+another), nothing is sent: so many names usually mean the caller field names end users, and the warning says to
+choose another with `--caller-field`. With more rows than the row limit (50,000 unless the list sets another) or a
+summary over 10 MB, nothing is sent either.
+
+**Example.** With an endpoint list that has one service, `orders` (server URL `https://orders.internal/v1`;
+endpoints `GET /orders/{}`, `POST /orders` and `GET /orders`), and this input:
+
+```csv
+caller,callerKind,service,method,path,count,lastSeen
+checkout-web,client,orders,GET,/v1/orders/8812?token=abc,42,2026-11-17
+billing-worker,Service,orders,post,/v1/orders,,2026-11-18T09:12:44.1234567Z
+"mobile app, ios",client,,GET,/orders/{},3,2026-11-16
+,client,orders,GET,/v1/orders/77,5,2026-11-15
+```
+
+`graphwake usage --source generic --input usage.csv --dry-run` (agent 0.3.0) prints:
+
+```text
+--- would send ---
+{"preset":"generic","agentVersion":"0.3.0","windowStart":"2026-11-15","windowEnd":"2026-11-18","countsIncluded":true,"unmatchedRequests":3,"withheldRequests":0,"anonymousRequests":5,"rows":[{"caller":"billing-worker","callerKind":"service","endpointId":"ep-create","service":"orders","method":"POST","path":"/orders","count":1,"lastSeen":"2026-11-18"},{"caller":"checkout-web","callerKind":"client","endpointId":"ep-get","service":"orders","method":"GET","path":"/orders/{}","count":42,"lastSeen":"2026-11-17"}]}
+--- end ---
+Not sent (stays on this machine):
+  Requests that matched no endpoint, by host and path prefix:
+    (no host) /orders/{}  3
+  Requests withheld because the caller name looked personal: 0
+  Requests without a caller name: 5
+```
+
+The line between the markers is the exact body that would be sent. `/v1/orders/8812?token=abc` became the template
+`/orders/{}`; the `mobile app, ios` row names no service and matched nothing, so only its count is sent; the row
+without a caller is only counted.
+
+### Output and exit code
+
+`graphwake usage` prints one line, except `--dry-run` (the example above) and `graphwake usage query` (the query or
+configuration). The usage key is never printed. Warnings use the CI's warning format, as in [Output](#output).
+
+| Line | Meaning |
+|---|---|
+| `graphwake: usage sent: 2 callers, 3 endpoint rows (1 new caller, 2 suggestions, 0 subscriptions added).` | Sent. The numbers are Graphwake's answer. |
+| `graphwake: usage sent.` | Sent; Graphwake's answer had no numbers the agent could read. |
+| `... 5 requests matched no endpoint.` | Added to the sent line: counted, not sent by name. |
+| `... 7 requests had no caller name.` | Added to the sent line. |
+| `... 3 requests were withheld because the caller name looked personal.` | Added to the sent line. |
+| `... 1 line could not be read.` | Added to the sent line: lines or elements the preset skipped. |
+| `... 4 rows were not accepted.` | Added to the sent line: rows Graphwake did not take. |
+| `... The export was incomplete (the tool reported a timeout or a warning).` | Added to the sent line, last. What the export held was sent. |
+| `Note: the export was incomplete (the tool reported a timeout or a warning).` | The last line of a `--dry-run` when the export was incomplete. |
+| warning `usage not sent: no source given (one of: apim, appinsights, datadog, generic, kong, nginx, otel)` | No `--source`. An unknown name gives `unknown source "<name>" (one of: ...)`; the name is repeated only when it is up to 20 lower-case letters, digits and hyphens, else the line is `unknown source (one of: ...)`. |
+| warning `usage not sent: invalid arguments: ...` | An unknown flag or a flag without its value. |
+| warning `usage not sent: unexpected argument (flags take the form --name value)` | A word that is not a flag. |
+| warning `usage not sent: no usage key (set GRAPHWAKE_USAGE_KEY)` | No key. |
+| warning `usage not sent: GRAPHWAKE_URL must be an http(s) URL` | The API URL is not `http` or `https`. |
+| warning `usage not sent: the input file could not be opened` | `--input` names a file that cannot be read. |
+| warning `usage not sent: the input file is empty` | The file holds nothing but white space. |
+| warning `usage not sent: no input (give --input or pipe a file)` | No `--input` and nothing piped in. |
+| warning `usage not sent: the input could not be read` | Not one line the preset can read (for `generic` CSV also: no header line with the required columns), or a read error. |
+| warning `usage not sent: the input held no requests` | The input was read but held no request. |
+| warning `usage not sent: the export was incomplete (the tool reported a timeout or a warning) and held no requests` | An incomplete export without a single request. |
+| warning `usage not sent: --service names no service in the endpoint list Graphwake sent` | Check `--service`. |
+| warning `usage not sent: too many distinct callers (2400, limit 2000). The caller field may identify end users; choose another with --caller-field` | Over the caller limit. Graphwake's own check gives the same sentence without the numbers. |
+| warning `usage not sent: the summary is too large` | Over the row limit or 10 MB (the agent's check or Graphwake's). |
+| warning `usage not sent: the summary could not be built` | An internal problem building the summary. |
+| warning `usage not sent: no caller names were found in the input. Check --caller-field` | No request had a caller name. |
+| warning `usage not sent: no caller name could be sent: every name looked personal (an e-mail address, an IP address or a token) or was missing. Check --caller-field` | Every request was withheld or had no caller name. |
+| warning `usage not sent: nothing in the input matched an endpoint` | Check the mappings, the server URLs or `--service`; `--dry-run` shows the unmatched hosts and paths. |
+| warning `usage not sent: Graphwake's endpoint list could not be read` | The endpoint list answer was not valid. |
+| warning `usage not sent: the key was not accepted` | HTTP 401: check `GRAPHWAKE_USAGE_KEY`. |
+| warning `usage not sent: the Graphwake account is closed` | HTTP 402. |
+| warning `usage not sent: Usage Discovery is not in your plan` | HTTP 403. |
+| warning `usage not sent: Graphwake rejected the summary as invalid` | HTTP 400. |
+| warning `usage not sent: Graphwake is rate limiting this key; try again later` | HTTP 429. |
+| warning `usage not sent: Graphwake could not be reached` | Network error or HTTP 503 after 3 attempts. |
+| warning `usage not sent: unexpected response 500` | Any other status. |
+| warning `unknown source "<name>" (one of: ...)` | `graphwake usage query` with an unknown or missing source (`no source given (one of: ...)`). |
+| `graphwake: internal error, nothing sent` | A bug in the agent; it still exits 0. |
+
+"The export was incomplete" means: a Datadog answer whose `meta` reports a status other than `done` or a warning,
+or an answer cut short (it ends early, or the next answer starts where its next bucket belongs); or an Application
+Insights API answer (the `tables` form) with an `error` member that is not null.
+
+The exit code is always 0: `graphwake usage` never fails the pipeline, whatever it prints.
+
+### Running it on a schedule
+
+Run the step where your logs are, once a day, after the step that writes the export. The examples use the `generic`
+preset and the Docker image; the arguments after the image name replace its default command (`upload`). Add
+`GRAPHWAKE_USAGE_KEY` as a secret. The GitHub Action, the GitLab template and the Azure DevOps task only upload
+specs.
+
+GitHub Actions:
+
+```yaml
+on:
+  schedule:
+    - cron: "0 5 * * *"   # daily, 05:00 UTC
+  workflow_dispatch:
+
+jobs:
+  api-usage:
+    runs-on: ubuntu-latest
+    steps:
+      # ... write the requests of the last days to usage.csv (see "graphwake usage query --source generic")
+      - name: Send usage to Graphwake
+        env:
+          GRAPHWAKE_USAGE_KEY: ${{ secrets.GRAPHWAKE_USAGE_KEY }}
+        run: >-
+          docker run --rm -e GRAPHWAKE_USAGE_KEY -v "$PWD:/w" -w /w
+          ghcr.io/graphwake/agent:0.3.0 usage --source generic --input usage.csv
+          || echo "graphwake: agent not run, usage not sent"
+```
+
+Azure Pipelines:
+
+```yaml
+schedules:
+  - cron: "0 5 * * *"   # daily, 05:00 UTC
+    displayName: Daily usage summary
+    branches:
+      include: [main]
+    always: true
+
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  # ... write the requests of the last days to usage.csv (see "graphwake usage query --source generic")
+  - bash: |
+      docker run --rm -e GRAPHWAKE_USAGE_KEY -v "$PWD:/w" -w /w \
+        ghcr.io/graphwake/agent:0.3.0 usage --source generic --input usage.csv ||
+        echo "graphwake: agent not run, usage not sent"
+    displayName: Send usage to Graphwake
+    env:
+      GRAPHWAKE_USAGE_KEY: $(GRAPHWAKE_USAGE_KEY)
+```
+
+Inside the container the agent sees only the variables passed with `-e`, so its warnings start with
+`WARNING graphwake:`. To pipe the export instead of `--input`, give `docker run` the `-i` flag.
+
+Setup for each tool (the export step, the query, the schedule):
+https://graphwake.com/guides/find-api-consumers-from-gateway-logs. What the step sends, for security reviews:
+https://graphwake.com/security/usage-data.
 
 ## Building and releasing
 

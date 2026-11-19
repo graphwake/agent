@@ -7,7 +7,7 @@
   "helpMarkDown": "Downloads the graphwake agent (checksum verified) and runs `graphwake upload`. See https://github.com/graphwake/agent.",
   "category": "Utility",
   "author": "Graphwake",
-  "version": { "Major": 0, "Minor": 2, "Patch": 0 },
+  "version": { "Major": 0, "Minor": 3, "Patch": 0 },
   "instanceNameFormat": "Upload spec to Graphwake",
   "minimumAgentVersion": "3.232.1",
   "inputs": [
@@ -67,7 +67,7 @@
       "type": "string",
       "label": "Agent version",
       "required": false,
-      "defaultValue": "0.2.0",
+      "defaultValue": "0.3.0",
       "helpMarkDown": "Release of github.com/graphwake/agent to download."
     }
   ],

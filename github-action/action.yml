@@ -31,7 +31,7 @@ inputs:
   version:
     description: Agent version to download (a release of github.com/graphwake/agent).
     required: false
-    default: "0.2.0"
+    default: "0.3.0"
   github-token:
     description: Token used to find the merged pull request, check the branch tip, read the pull request labels and write the comment. The default job token is enough.
     required: false

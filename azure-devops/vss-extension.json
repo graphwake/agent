@@ -2,7 +2,7 @@
   "manifestVersion": 1,
   "id": "graphwake-agent",
   "name": "Graphwake",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "graphwake",
   "description": "Send your service's OpenAPI spec to Graphwake from Azure Pipelines. Breaking changes reach the teams that use the API before they ship.",
   "public": false,
