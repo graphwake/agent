@@ -520,7 +520,7 @@ the key `upload` uses, is a different key. A run:
 A request finds its endpoint in this order: a mapping set in Graphwake (host, path prefix, API name; the one with
 the most of them wins), else the host of a service's server URL, else the service the input names (`generic`) or
 `--service`. The method and the path, segment by segment, then pick the endpoint template. A request that matches
-no endpoint is only counted.
+no endpoint adds no row.
 
 ### Supported sources
 
@@ -547,7 +547,8 @@ makes no network call. Source names ignore letter case.
   without being kept.
 - `otel` reads only client spans with an HTTP method, a path and a start time; other spans are not counted.
 - In `generic`, `service` is the Graphwake service name and `path` is a concrete path or a template such as
-  `/orders/{id}`. A query string is dropped in every preset.
+  `/orders/{id}`.
+- In every preset, the query string of the request path is dropped before the path is matched.
 - A line or element a preset cannot read is skipped and counted; its content is never printed.
 
 ### Flags and environment
@@ -584,14 +585,14 @@ The POST body is the summary, and the summary has these fields and no others:
 | `windowStart` | The earliest day (UTC, `YYYY-MM-DD`) of the requests read. |
 | `windowEnd` | The latest day of the requests read. |
 | `countsIncluded` | `false` with `--no-counts`. |
-| `unmatchedRequests` | How many requests matched no endpoint. A number only. |
+| `unmatchedRequests` | How many requests matched no endpoint (of those with a caller name that is not withheld). A number only. |
 | `withheldRequests` | How many requests had a withheld caller name. A number only. |
 | `anonymousRequests` | How many requests had no caller name. A number only. |
 | `rows` | One row per caller, caller kind and endpoint, with the fields below. |
 
 | Field | What it holds |
 |---|---|
-| `caller` | The caller name as the input gives it, cut to 200 characters. Never a withheld name. |
+| `caller` | The caller name: the value of the caller field without white space at its ends, cut to its first 200 characters (a certificate subject: its common name). Never a name the rules below withhold. |
 | `callerKind` | `client` (a client of the gateway) or `service` (a service that calls another). |
 | `endpointId` | The endpoint's id, from the endpoint list Graphwake sent. |
 | `service` | The service's name, from that list. |
@@ -612,33 +613,62 @@ NGINX format that `graphwake usage query --source nginx` prints fills `caller` f
 (`$http_x_client_id`), and Kong's `--caller-field` can name a header such as `request.headers.x-client-id`.
 
 The caller name is whatever that field holds, so point the caller field at a field that names the application (a
-subscription, a consumer, a service). A value that matches one of the rules below is withheld; any other value is
-sent as it is, such as a host name or a status code if the caller field names one.
+subscription, a consumer, a service). The agent does this with the value, in this order:
 
-Also never sent: the caller names of requests that matched no endpoint, the table of unmatched requests by host and
-path prefix (printed by `--dry-run` only), and the content of lines that could not be read.
+1. White space at both ends is removed. An empty value is no caller name.
+2. A certificate subject is reduced to its common name; only the common name is sent, and it goes through the
+   next steps like any other name. From `CN=checkout,OU=Payments,O=Acme` the caller name is `checkout`. This is
+   for mutual TLS (NGINX's `$ssl_client_s_dn`). A value is read as a subject only when all of it is one: parts of
+   the form `TYPE=value`, separated by `,` or `+`, or each led by `/` in the older form (`/O=Acme/CN=checkout`),
+   every type one of `CN`, `O`, `OU`, `C`, `L`, `ST`, `DC`, `STREET`, `UID`, `SERIALNUMBER`, `emailAddress` or `E`
+   (in any letter case; spaces around a type or a value are ignored), with exactly one `CN` that is not empty. Any
+   other value stays as it is. That includes a subject the agent does not read: one without a common name or with
+   two, with another type, or with a value it cannot read with confidence (a quoted value or a hexadecimal escape,
+   for example). Such a subject still has its `=`, so the rules below withhold it.
+3. A value that matches one of the rules below is withheld.
+4. Any other value becomes the caller name, whatever it is (a host name or a status code, if the caller field
+   names one). A value over 200 characters is cut to its first 200, and white space at the end of the cut is
+   removed.
 
-**Withheld caller names.** A caller name is withheld when any of these applies; its requests are only counted in
-`withheldRequests`:
+A request that matched no endpoint adds no row, so a caller seen only in such requests is not named. Not sent
+either: the table of unmatched requests by host and path prefix (printed by `--dry-run`
+only), and the content of lines that could not be read.
 
-- it contains an e-mail address, such as `jane@contoso.com`;
-- it contains an IPv4 or IPv6 address in its standard written form, also with a port or inside a host name:
-  `10.0.0.12:8080`, `10.0.0.12.nip.io`, `2001:db8::1` (other ways of writing an address, such as `010.0.0.12`
-  with a leading zero, are not caught);
-- it contains a secret-like run of 32 or more letters, digits and `+/_=-` that is pure hexadecimal or mixes
-  upper-case letters, lower-case letters and digits, such as `dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk` (a
-  canonical UUID such as `550e8400-e29b-41d4-a716-446655440000` is not withheld);
-- it contains any run of 32 or more hexadecimal characters, also behind a label:
-  `apikey=0123456789abcdef0123456789abcdef`;
-- it contains a control character (a newline, a carriage return, a tab, ESC);
-- it contains the sequence `##`, as in `x ##y`;
-- it looks like a path or a URL: without surrounding spaces it starts with `/`, or it contains `://` or `?`, or
-  one of its words (separated by white space) starts with `/` and is longer than one character:
-  `/v1/orders/8812?token=abc`, `https://orders.example/a`, `orders?page=2`, `GET /v1/orders/8812` (`team/app` and
-  `Checkout / Web` are not withheld);
-- it looks like structured content, such as a JSON or XML body or a `key=value` query string: it contains any of
-  `{`, `}`, `"`, `<`, `>` or `=`: `{"card":"4111"}`, `page=2&token=abc`, `<order id="1">` (`&` alone is allowed, so
-  `R&D team` is not withheld).
+**Withheld caller names.** A caller name is withheld when any of these applies, to the name as it stands after
+steps 1 and 2 and before it is cut; its requests add no row and are counted in `withheldRequests`. Letters and
+digits here are the ASCII ones (`a` to `z`, `A` to `Z`, `0` to `9`).
+
+- It contains an e-mail address of this form: one or more letters, digits or `._%+-`, then `@`, then groups of
+  letters, digits and hyphens joined by single dots, where a group after the first begins with two or more letters:
+  `jane@contoso.com`. Not caught: a domain without such a dot, as in `jane@localhost`, and an address with another
+  character right before the `@`, as in `jané@contoso.com`.
+- It contains an IPv4 address: four numbers from 0 to 255, without a leading zero, joined by dots, with no
+  letter or digit directly before the first number or directly after the last: `10.0.0.12`, `10.0.0.12:8080`,
+  `10.0.0.12.nip.io`, `src:10.0.0.12`. Any four such numbers count, a version such as `app 1.2.3.4` too. Not
+  caught: `ip10.0.0.12` (a letter before the first number), `010.0.0.12` (a leading zero), `ip-10-0-0-12` (no dots).
+- It contains an IPv6 address in its usual written form, with at least one hexadecimal digit, as a whole piece.
+  The pieces are what is left when the name is split at every character other than a letter, a digit, `.` or `:`,
+  without the dots at a piece's ends: `2001:db8::1`, `[fe80::1]:443`, `client 2001:db8::1`. Not caught: a
+  piece that holds more than the address, as in `src:2001:db8::1` and `2001:db8::1.nip.io`.
+- It contains a run of 32 or more letters, digits and `+/_=-` that, at its full length, has an upper-case letter,
+  a lower-case letter and a digit: `dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk`. A run that is exactly a UUID in
+  its usual form, such as `550e8400-e29b-41d4-a716-446655440000`, is not withheld. Not caught: a long run without
+  one of the three, such as `tok_abcdefghijklmnopqrstuvwxyz0123456789ab`.
+- It contains 32 or more hexadecimal characters (`0` to `9`, `a` to `f`, `A` to `F`) in a row, also behind a
+  label: `token-da39a3ee5e6b4b0d3255bfef95601890afd80709`.
+- It contains a control character, such as a newline, a carriage return, a tab or ESC.
+- It contains the sequence `##`, as in `x ##y`.
+- It looks like a path or a URL: it starts with `/`, or it contains `://` or `?`, or one of its words (separated
+  by white space) starts with `/` and is longer than one character: `/v1/orders/8812`, `https://orders.example/a`,
+  `orders?page`, `GET /v1/orders/8812`. Not caught: a path without the leading `/` or behind a label, as in
+  `v1/orders/8812` and `uri:/v1/x`. `team/app` and `Checkout / Web` are not withheld either.
+- It contains any of `{`, `}`, `"`, `<`, `>` or `=`, the characters of a JSON or XML body or of a `key=value` query
+  string: `{"card":"4111"}`, `page=2&token=abc`, `<order id="1">`. Not caught: text without one of these six
+  characters, such as `card:4111,cvc:123`; `&` is not one of them, so `R&D team` is not withheld.
+
+**A safety net, not a guarantee.** These rules catch common shapes of personal or secret values. A value in another
+shape is not withheld: `Jane Doe` and `hunter2` are not. So choose a caller field that holds a client or application
+name, and look at the caller names a `--dry-run` prints before the first real run.
 
 **Limits.** With more distinct callers (caller name and kind pairs) than the caller limit (2,000, unless the
 endpoint list Graphwake sends sets another), nothing is sent: so many names usually mean the caller field names end
@@ -670,8 +700,9 @@ Not sent (stays on this machine):
 ```
 
 The line between the markers is the exact body that would be sent. `/v1/orders/8812?token=abc` became the template
-`/orders/{}`; the `mobile app, ios` row names no service and matched nothing, so only its count is sent; the row
-without a caller is only counted.
+`/orders/{}`; the `mobile app, ios` row names no service and matched nothing, so it adds no row and its 3 requests
+are in `unmatchedRequests`; the row without a caller adds its 5 requests to `anonymousRequests`. Their days still
+count for `windowStart` and `windowEnd`.
 
 ### Output and exit code
 

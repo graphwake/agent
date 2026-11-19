@@ -23,7 +23,8 @@ const usageHelp = `usage: graphwake usage --source <preset> [--input <file>] [--
        graphwake usage query --source <preset>
 Reads a gateway log or trace export from --input or stdin and sends Graphwake a summary: which caller used which
 endpoint, how often and when last. Other than the one value you choose as the caller name, nothing from a request
-is sent; caller names that look personal, secret, path-like or structured are withheld.
+is sent. A caller name that matches one of the withholding rules listed in the README is withheld; the rules are a
+safety net, not a guarantee, so choose a caller field that holds a client or application name.
 Presets: apim, appinsights, datadog, generic, kong, nginx, otel. "graphwake usage query" prints the query or configuration that produces the input.
 --dry-run prints the summary that would be sent and what stays on this machine, and sends nothing.
 The usage key is read from GRAPHWAKE_USAGE_KEY (--key is accepted but not recommended).

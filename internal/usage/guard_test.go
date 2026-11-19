@@ -71,6 +71,61 @@ func TestLooksPersonal(t *testing.T) {
 		{"team:app:prod", false},
 		{"billing-service v2.1.0", false},
 		{"", false},
+		// each rule on its own: a name here trips one rule only, so removing that rule fails the row
+		{"orders?page", true}, // "?"
+		{"/", true},           // starts with "/" (the word rule needs more than "/")
+		{"a ://b", true},      // "://"
+		{"{a", true},
+		{"a}", true},
+		{"<a", true},
+		{"a>b", true},
+		{`a"b`, true},
+		{"a\u0085b", true}, // a control character that is not ASCII
+		// e-mail addresses: "@", then groups of ASCII letters, digits and hyphens joined by single dots, where a
+		// group after the first begins with two or more letters
+		{"jane@x.co1", true},
+		{"jane@localhost", false},        // no dot in the domain
+		{"jane@contoso.c", false},        // one letter after the dot
+		{"jane@contoso.c0m", false},      // one letter after the dot
+		{"jan\u00e9@contoso.com", false}, // a letter that is not ASCII before the "@"
+		{"jane @contoso.com", false},
+		// IPv4: four whole dot-separated numbers, 0 to 255, no leading zero
+		{"src:10.0.0.12", true},
+		{"host.10.0.0.12", true},
+		{"client-10.0.0.12", true},
+		{"1.2.3.4", true}, // a four-part version number is one too
+		{"ip10.0.0.12", false},
+		{"10.0.0.12abc", false},
+		{"010.0.0.12", false},
+		{"10.0.0.256", false},
+		{"ip-10-0-0-12", false},
+		// IPv6: a whole piece of the name that has a hexadecimal digit
+		{"client 2001:db8::1", true},
+		{"fe80::1%eth0", true},
+		{"src:2001:db8::1", false},
+		{"2001:db8::1.nip.io", false},
+		{"::", false},
+		{"a :: b", false},
+		// secret-like runs: 32 characters at least, with upper case, lower case and a digit, and not a UUID
+		{"Abcdefghijklmnopqrstuvwxyz012345", true},            // 32 characters
+		{"Abcdefghijklmnopqrstuvwxyz01234", false},            // 31 characters
+		{"tok_abcdefghijklmnopqrstuvwxyz0123456789ab", false}, // no upper case
+		{"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789AB", false},     // no lower case
+		{"AbcdefghijklmnopqrstuvwxyzAbcdefghij", false},       // no digit
+		{"550e8400-E29B-41d4-a716-446655440000", false},       // a UUID in mixed case
+		{"550e8400-E29B-41d4-a716-446655440000-extra", true},  // more than a UUID
+		{"0123456789abcdef0123456789abcde", false},            // 31 hexadecimal characters
+		// values no rule catches: the rules are a safety net, not a guarantee
+		{"Jane Doe", false},
+		{"hunter2", false},
+		{"v1/orders/8812", false},
+		{"uri:/v1/x", false},
+		{"card:4111,cvc:123", false},
+		// the edges of the rules: dots at the ends of a piece are dropped, a letter that is not ASCII ends a piece,
+		// white space before a lone "/" is not part of the name
+		{"host 2001:db8::1.", true},
+		{"\u00e910.0.0.12", true},
+		{" /", true},
 	}
 	for _, tt := range tests {
 		if got := LooksPersonal(tt.name); got != tt.want {

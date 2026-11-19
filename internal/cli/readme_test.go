@@ -273,28 +273,40 @@ func flagFor(pairs map[string]string, variable string) string {
 	return "no flag"
 }
 
-// withheldProbes are names that each trip one rule of usage.LooksPersonal (a control character cannot be written in
-// a code span). The README's withheld-name list must show each as an example; a new guard rule needs a probe here.
+// withheldProbes are names that trip the rules of usage.LooksPersonal, at least one for each rule (a control character
+// cannot be written in a code span). Some trip more than one rule; the rows that pin each rule on its own are in
+// usage.TestLooksPersonal. The README's withheld-name list must show each as an example; a new guard rule needs a
+// probe here.
 var withheldProbes = []string{
-	"jane@contoso.com", // e-mail address
-	"10.0.0.12:8080",   // IPv4 with a port
-	"10.0.0.12.nip.io", // IPv4 inside a host name
-	"2001:db8::1",      // IPv6
-	"dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk", // secret-like
-	"apikey=0123456789abcdef0123456789abcdef",     // 32+ hexadecimal characters
-	"x ##y",                     // "##"
-	"/v1/orders/8812?token=abc", // starts with "/"
-	"https://orders.example/a",  // contains "://"
-	"orders?page=2",             // contains "?"
-	"GET /v1/orders/8812",       // a word that starts with "/"
-	`{"card":"4111"}`,           // structured content: { } "
-	"page=2&token=abc",          // structured content: =
-	`<order id="1">`,            // structured content: < >
+	"jane@contoso.com",   // e-mail address
+	"10.0.0.12",          // IPv4
+	"10.0.0.12:8080",     // IPv4 with a port
+	"10.0.0.12.nip.io",   // IPv4 inside a host name
+	"src:10.0.0.12",      // IPv4 behind a label
+	"app 1.2.3.4",        // four numbers that are a version
+	"2001:db8::1",        // IPv6
+	"[fe80::1]:443",      // IPv6 in brackets with a port
+	"client 2001:db8::1", // IPv6 as one piece of a name
+	"dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",    // secret-like
+	"token-da39a3ee5e6b4b0d3255bfef95601890afd80709", // 32+ hexadecimal characters
+	"x ##y",                    // "##"
+	"/v1/orders/8812",          // starts with "/"
+	"https://orders.example/a", // contains "://"
+	"orders?page",              // contains "?"
+	"GET /v1/orders/8812",      // a word that starts with "/"
+	`{"card":"4111"}`,          // structured content: { } "
+	"page=2&token=abc",         // structured content: =
+	`<order id="1">`,           // structured content: < >
 }
 
-// notWithheldExamples are the names the README's list shows as not withheld; the guard must agree.
+// notWithheldExamples are the names the README's list shows as not withheld or not caught; the guard must agree.
 var notWithheldExamples = []string{"550e8400-e29b-41d4-a716-446655440000", "team/app", "Checkout / Web", "R&D team",
-	"010.0.0.12"}
+	"jane@localhost", "jan\u00e9@contoso.com", "ip10.0.0.12", "010.0.0.12", "ip-10-0-0-12", "src:2001:db8::1",
+	"2001:db8::1.nip.io", "tok_abcdefghijklmnopqrstuvwxyz0123456789ab", "v1/orders/8812", "uri:/v1/x",
+	"card:4111,cvc:123"}
+
+// sentExamples are the values the README's safety-net paragraph names as sent; the guard must not withhold them.
+var sentExamples = []string{"Jane Doe", "hunter2"}
 
 func TestReadme_withheld_name_list_has_every_rule(t *testing.T) {
 	section := readmeSection(t, readFileT(t, readmePath), "### What the usage step sends")
@@ -321,6 +333,22 @@ func TestReadme_withheld_name_list_has_every_rule(t *testing.T) {
 		}
 		if !contains(spans, name) {
 			t.Errorf("the README's withheld-name list has no not-withheld example %q", name)
+		}
+	}
+	net := section[start+len(list):]
+	if !strings.HasPrefix(net, "\n\n**A safety net, not a guarantee.**") {
+		t.Fatal(`no "**A safety net, not a guarantee.**" paragraph right after the withheld-name list`)
+	}
+	net = net[2:]
+	if end := strings.Index(net, "\n\n"); end >= 0 {
+		net = net[:end]
+	}
+	for _, name := range sentExamples {
+		if usage.LooksPersonal(name) {
+			t.Errorf("%q is withheld by the guard, but the README says it is sent", name)
+		}
+		if !contains(codeSpans(net), name) {
+			t.Errorf("the README's safety-net paragraph has no example %q", name)
 		}
 	}
 	// Every other full example in the list is withheld (the list also quotes characters, such as "+/_=-", and the
