@@ -21,9 +21,13 @@ var (
 // hexadecimal, or mixing upper case, lower case and digits). Such names are never sent; their requests are only
 // counted as withheld. A name with a control character (newline, carriage return, tab, ESC, ...) or "##" is withheld
 // too: no real client or service name has one, and such a name could break a log line or start a CI logging command
-// ("##vso[") wherever it is printed.
+// ("##vso[") wherever it is printed. A name that looks like a path or a URL is withheld as well (see looksLikePath): a
+// caller field pointed at a request path must not send that path or its query string.
 func LooksPersonal(name string) bool {
 	if strings.Contains(name, "##") || strings.IndexFunc(name, unicode.IsControl) >= 0 {
+		return true
+	}
+	if looksLikePath(name) {
 		return true
 	}
 	if emailPattern.MatchString(name) || hexRun.MatchString(name) {
@@ -35,6 +39,13 @@ func LooksPersonal(name string) bool {
 		}
 	}
 	return hasIPLiteral(name)
+}
+
+// looksLikePath reports whether a caller name looks like a path or a URL: the trimmed name starts with "/", or
+// contains "://" or "?". "team/app" is not one.
+func looksLikePath(name string) bool {
+	name = strings.TrimSpace(name)
+	return strings.HasPrefix(name, "/") || strings.Contains(name, "://") || strings.Contains(name, "?")
 }
 
 // looksRandom tells a secret from a long service name: a secret is pure hexadecimal or mixes upper-case letters,

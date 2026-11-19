@@ -192,6 +192,9 @@ func usageSend(args []string, d Deps) int {
 		if s.partial {
 			io.WriteString(d.Out, "Note: the export was incomplete ("+partialReason+").\n")
 		}
+		if len(s.snap.Rows) == 0 { // sendSummary never sends a summary without rows
+			io.WriteString(d.Out, "Note: this summary has no rows, so it would not be sent.\n")
+		}
 		return 0
 	}
 	sendSummary(ctx, r, s, newUsageClient(cfg, d, platform))

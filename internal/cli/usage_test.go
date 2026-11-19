@@ -500,3 +500,52 @@ func TestUsage_partial_export_is_never_silent(t *testing.T) {
 		t.Fatalf("%d posts", len(b.usagePosts))
 	}
 }
+
+// A caller field that names a path (here Kong's request.uri) gives path-like caller names: they are withheld, so
+// neither the path nor its query string reaches the summary or the output.
+func TestUsage_path_as_caller_is_withheld(t *testing.T) {
+	b := newBackend(t)
+	input := `{"consumer":{"username":"checkout-web"},"request":{"method":"GET","uri":"/v1/orders/8812?token=abc",` +
+		`"headers":{"host":"orders.internal"}},"started_at":1794993164123}` + "\n" +
+		`{"consumer":{"username":"checkout-web"},"request":{"method":"GET","uri":"/v1/orders?page=2",` +
+		`"headers":{"host":"orders.internal"}},"started_at":1794993164123}` + "\n"
+	out := b.usageRun(t, run{args: []string{"--source", "kong", "--caller-field", "request.uri", "--dry-run"},
+		stdin: strings.NewReader(input)}, true)
+	if !strings.Contains(out, `"withheldRequests":2`) || !strings.Contains(out, `"rows":[]`) ||
+		!strings.Contains(out, "Requests withheld because the caller name looked personal: 2\n") {
+		t.Fatalf("out =\n%s", out)
+	}
+	for _, leak := range []string{"8812", "token", "page=2", "/v1/orders"} {
+		if strings.Contains(out, leak) {
+			t.Fatalf("output contains %q:\n%s", leak, out)
+		}
+	}
+	if len(b.usagePosts) != 0 {
+		t.Fatalf("%d posts", len(b.usagePosts))
+	}
+}
+
+// A dry run whose summary has no rows says that the real run would send nothing; one with rows does not.
+func TestUsage_dry_run_says_when_nothing_would_be_sent(t *testing.T) {
+	const note = "Note: this summary has no rows, so it would not be sent."
+	b := newBackend(t)
+	out := b.usageRun(t, run{args: []string{"--source", "generic", "--dry-run"},
+		stdin: strings.NewReader("caller,method,path,lastSeen\napp,GET,/nothing/here,2026-11-18\n")}, true)
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	if lines[len(lines)-1] != note || strings.Count(out, note) != 1 {
+		t.Fatalf("out =\n%s", out)
+	}
+	// The real run with the same input sends nothing.
+	if out := b.usageRun(t, run{args: []string{"--source", "generic"},
+		stdin: strings.NewReader("caller,method,path,lastSeen\napp,GET,/nothing/here,2026-11-18\n")}, false); out !=
+		"WARNING graphwake: usage not sent: nothing in the input matched an endpoint" {
+		t.Fatalf("out = %q", out)
+	}
+	out = b.usageRun(t, run{args: []string{"--source", "generic", "--input", writeInput(t, usageCSV), "--dry-run"}}, true)
+	if strings.Contains(out, "Note:") {
+		t.Fatalf("summary with rows: out =\n%s", out)
+	}
+	if len(b.usagePosts) != 0 {
+		t.Fatalf("%d posts", len(b.usagePosts))
+	}
+}

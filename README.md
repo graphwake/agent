@@ -502,8 +502,9 @@ graphwake upload --spec http://localhost:5000/swagger/v1/swagger.json
 
 `graphwake usage` reads a gateway log or trace export and sends Graphwake a summary: which caller used which
 endpoint, how many times and on which day last. It reads one file or standard input, runs wherever you run it (a
-scheduled CI job or any scheduler) and connects to nothing but Graphwake. Raw paths, query strings and
-personal-looking caller names stay on that machine, and `--dry-run` prints exactly what would be sent.
+scheduled CI job or any scheduler) and connects to nothing but Graphwake. The summary carries endpoint templates
+from Graphwake's list, never a request's own path or query string, and caller names that look personal or look like
+a path or a URL are withheld; `--dry-run` prints the summary it would send, and says so when nothing would be sent.
 
 Optional. Without it, Graphwake still needs only your spec.
 
@@ -525,9 +526,9 @@ no endpoint is only counted.
 | Source | Tool | Also accepted | Input | Caller name (kind) | `--caller-field` names |
 |---|---|---|---|---|---|
 | `apim` | Azure API Management | `azure-apim`, `api-management` | The JSON that `az monitor log-analytics query -o json` writes for the printed query over `ApiManagementGatewayLogs` (requests of the last 7 days, grouped). | The subscription, `ApimSubscriptionId` (`client`). | A column of the result. |
-| `appinsights` | Azure Application Insights | `app-insights`, `applicationinsights`, `application-insights` | The JSON that `az monitor log-analytics query -o json` writes for the printed query over `AppDependencies` (outgoing HTTP calls of the last 7 days, grouped; workspace-based Application Insights). The answer of `az monitor app-insights query` (classic column names) is read too. | The calling service, `AppRoleName`, else `cloud_RoleName` (`service`). | A column of the result. |
+| `appinsights` | Azure Application Insights | `app-insights`, `applicationinsights`, `application-insights` | The JSON that `az monitor log-analytics query -o json` writes for the printed query over `AppDependencies` (outgoing HTTP calls of the last 7 days, grouped; workspace-based Application Insights). The answer of `az monitor app-insights query` is read too when its columns are named as in the printed query (`Host`, `Method`, `Path`, `Calls`, `LastSeen`), with the caller in `AppRoleName` or the classic `cloud_RoleName`. | The calling service, `AppRoleName`, else `cloud_RoleName` (`service`). | A column of the result. |
 | `datadog` | Datadog APM | `dd` | The answers of the spans aggregate API (`POST /api/v2/spans/analytics/aggregate`) that the printed `curl` call appends to one file, one call per calling service. | The calling service, the `service` facet (`service`). | A facet of the bucket's `by`. |
-| `generic` | Any other tool | `csv`, `json` | CSV with a header line, a JSON array of objects or one JSON object per line, with the columns `caller,callerKind,service,method,path,count,lastSeen`. | The `caller` column (`callerKind`: `client` or `service`, default `client`). | A column. |
+| `generic` | Any other tool | `csv`, `json` | CSV with a header line, a JSON array of objects or one JSON object per line, with the columns `caller,callerKind,service,method,path,count,lastSeen`. `caller` (or the `--caller-field` column), `method`, `path` and `lastSeen` are required; `callerKind`, `service` and `count` may be left out or empty. | The `caller` column (`callerKind`: `client` or `service`, default `client`). | A column. |
 | `kong` | Kong | | The file-log plugin's log (one JSON object per line) or an http-log batch (a JSON array). | The consumer: `consumer.username`, else `custom_id`, else `id` (`client`). | A dotted path, such as `consumer.custom_id` or `request.headers.x-client-id`. |
 | `nginx` | NGINX | | An access log written in the JSON log format the printed configuration adds (one JSON object per line). | The `caller` member, which that format fills from the `X-Client-Id` request header (`client`). | A member of the log line. |
 | `otel` | OpenTelemetry | `opentelemetry`, `otlp` | The OpenTelemetry Collector file exporter's OTLP JSON (one object per line), with the printed Collector configuration, which keeps the HTTP client spans. | The calling service, the resource attribute `service.name` (`service`). | A resource attribute. |
@@ -541,7 +542,8 @@ makes no network call. Source names ignore letter case.
   `otel` every line or span is one request.
 - `datadog`: the answers carry no dates, so every request gets the day the step runs (UTC).
 - `kong` reads only `consumer`, `request.method`, `request.uri`, `request.headers.host` (or the host in
-  `request.url`), `started_at` and the `--caller-field` path of an entry; every other member is skipped unread.
+  `request.url`), `started_at` and the `--caller-field` path of an entry; every other member is passed over
+  without being kept.
 - `otel` reads only client spans with an HTTP method, a path and a start time; other spans are not counted.
 - In `generic`, `service` is the Graphwake service name and `path` is a concrete path or a template such as
   `/orders/{id}`. A query string is dropped in every preset.
@@ -560,7 +562,7 @@ A flag wins over the variable. The two switches take `true`, `1`, `yes` or `on` 
 | `--service` | `GRAPHWAKE_USAGE_SERVICE` | The Graphwake service a request belongs to when no mapping, no server URL host and no `service` column decides it. It must name a service in the endpoint list. Default: none. |
 | `--caller-field` | `GRAPHWAKE_USAGE_CALLER_FIELD` | The field that names the caller (see the last column of [Supported sources](#supported-sources)). Default: the preset's. |
 | `--no-counts` | `GRAPHWAKE_USAGE_NO_COUNTS=true` | Send no request counts: the rows have no `count` and `countsIncluded` is `false`. Default: off, counts are sent. |
-| `--dry-run` | `GRAPHWAKE_USAGE_DRY_RUN=true` | Fetch the endpoint list, build the summary and print it with what stays on this machine. Nothing is sent. Default: off. |
+| `--dry-run` | `GRAPHWAKE_USAGE_DRY_RUN=true` | Fetch the endpoint list, build the summary and print it with what stays on this machine, and say so when the summary has no rows and would not be sent. Nothing is sent. Default: off. |
 
 `graphwake usage -h` prints the help.
 
@@ -597,29 +599,44 @@ The POST body is the summary, and the summary has these fields and no others:
 | `count` | The number of requests. Left out with `--no-counts`. It stops at the largest 64-bit integer instead of overflowing. |
 | `lastSeen` | The latest day (UTC) the caller used the endpoint. |
 
-Never sent: raw paths and query strings; hosts and API names, which may be IP addresses (they only find the
-endpoint, on this machine); request and response bodies and status codes (no preset reads them); caller names that
-contain an IP address (they are withheld, see below); the caller names of unmatched requests; withheld caller names; the table of unmatched requests by host and path prefix (printed by `--dry-run` only); the
-content of lines that could not be read. Header values: no header value is sent except the one you choose as the
-caller name. The NGINX format that `graphwake usage query --source nginx` prints fills `caller` from the
-`X-Client-Id` header (`$http_x_client_id`), and Kong's `--caller-field` can name a header such as
-`request.headers.x-client-id`.
+Each row's endpoint id, service, method and path template come from the endpoint list Graphwake sent. From the
+input, a row gets only these: the value of the field you choose as the caller (the preset's default or
+`--caller-field`), sent as the caller name unless it is withheld; in `generic`, the `callerKind` column (`client` or
+`service`; the other presets set the kind themselves); the number of requests; and their days. Nothing is
+sent from any other field: not a request's path or query string, host, API name, other headers, body, status code
+or client IP address. Those only find the endpoint, on this machine, or are not read at all.
 
-**Withheld caller names.** A caller name is withheld when it contains any of these; its requests are only counted in
+Headers are the common case of that rule: no header value is sent except the one you choose as the caller name. The
+NGINX format that `graphwake usage query --source nginx` prints fills `caller` from the `X-Client-Id` header
+(`$http_x_client_id`), and Kong's `--caller-field` can name a header such as `request.headers.x-client-id`.
+
+The caller name is whatever that field holds, so point the caller field at a field that names the application (a
+subscription, a consumer, a service). A value that looks like personal data, a secret, a path or a URL is withheld
+(below); a host name or a status code is not, if the caller field names one.
+
+Also never sent: the caller names of requests that matched no endpoint, the table of unmatched requests by host and
+path prefix (printed by `--dry-run` only), and the content of lines that could not be read.
+
+**Withheld caller names.** A caller name is withheld when any of these applies; its requests are only counted in
 `withheldRequests`:
 
-- an e-mail address;
-- an IPv4 or IPv6 address, also with a port or inside a host name (`10.0.0.12:8080`, `10.0.0.12.nip.io`);
-- a secret-like run of 32 or more letters, digits and `+/_=-` that mixes upper-case letters, lower-case letters
-  and digits (a canonical UUID is not withheld);
-- any run of 32 or more hexadecimal characters, also behind a label such as `apikey=`;
-- a control character (a newline, a carriage return, a tab, ESC);
-- the sequence `##`.
+- it contains an e-mail address, such as `jane@contoso.com`;
+- it contains an IPv4 or IPv6 address, also with a port or inside a host name: `10.0.0.12:8080`,
+  `10.0.0.12.nip.io`, `2001:db8::1`;
+- it contains a secret-like run of 32 or more letters, digits and `+/_=-` that is pure hexadecimal or mixes
+  upper-case letters, lower-case letters and digits, such as `dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk` (a
+  canonical UUID such as `550e8400-e29b-41d4-a716-446655440000` is not withheld);
+- it contains any run of 32 or more hexadecimal characters, also behind a label:
+  `apikey=0123456789abcdef0123456789abcdef`;
+- it contains a control character (a newline, a carriage return, a tab, ESC);
+- it contains the sequence `##`, as in `x ##y`;
+- it looks like a path or a URL: without surrounding spaces it starts with `/`, or it contains `://` or `?`:
+  `/v1/orders/8812?token=abc`, `https://orders.example/a`, `orders?page=2` (`team/app` is not withheld).
 
-**Limits.** With more distinct callers than the caller limit (2,000, unless the endpoint list Graphwake sends sets
-another), nothing is sent: so many names usually mean the caller field names end users, and the warning says to
-choose another with `--caller-field`. With more rows than the row limit (50,000 unless the list sets another) or a
-summary over 10 MB, nothing is sent either.
+**Limits.** With more distinct callers (caller name and kind pairs) than the caller limit (2,000, unless the
+endpoint list Graphwake sends sets another), nothing is sent: so many names usually mean the caller field names end
+users, and the warning says to choose another with `--caller-field`. With more rows than the row limit (50,000
+unless the list sets another) or a summary over 10 MB, nothing is sent either.
 
 **Example.** With an endpoint list that has one service, `orders` (server URL `https://orders.internal/v1`;
 endpoints `GET /orders/{}`, `POST /orders` and `GET /orders`), and this input:
@@ -657,16 +674,17 @@ configuration). The usage key is never printed. Warnings use the CI's warning fo
 | Line | Meaning |
 |---|---|
 | `graphwake: usage sent: 2 callers, 3 endpoint rows (1 new caller, 2 suggestions, 0 subscriptions added).` | Sent. The numbers are Graphwake's answer. |
-| `graphwake: usage sent.` | Sent; Graphwake's answer had no numbers the agent could read. |
+| `graphwake: usage sent.` | Sent; Graphwake's answer was not JSON. |
 | `... 5 requests matched no endpoint.` | Added to the sent line: counted, not sent by name. |
 | `... 7 requests had no caller name.` | Added to the sent line. |
 | `... 3 requests were withheld because the caller name looked personal.` | Added to the sent line. |
 | `... 1 line could not be read.` | Added to the sent line: lines or elements the preset skipped. |
 | `... 4 rows were not accepted.` | Added to the sent line: rows Graphwake did not take. |
 | `... The export was incomplete (the tool reported a timeout or a warning).` | Added to the sent line, last. What the export held was sent. |
-| `Note: the export was incomplete (the tool reported a timeout or a warning).` | The last line of a `--dry-run` when the export was incomplete. |
+| `Note: the export was incomplete (the tool reported a timeout or a warning).` | Printed after a `--dry-run` summary when the export was incomplete. |
+| `Note: this summary has no rows, so it would not be sent.` | The last line of a `--dry-run` whose summary has no rows: the same run without `--dry-run` sends nothing and warns why. |
 | warning `usage not sent: no source given (one of: apim, appinsights, datadog, generic, kong, nginx, otel)` | No `--source`. An unknown name gives `unknown source "<name>" (one of: ...)`; the name is repeated only when it is up to 20 lower-case letters, digits and hyphens, else the line is `unknown source (one of: ...)`. |
-| warning `usage not sent: invalid arguments: ...` | An unknown flag or a flag without its value. |
+| warning `usage not sent: invalid arguments: ...` | An unknown flag, a flag without its value or an invalid value (such as `--no-counts=maybe`). `graphwake usage query` prints the same line. |
 | warning `usage not sent: unexpected argument (flags take the form --name value)` | A word that is not a flag. |
 | warning `usage not sent: no usage key (set GRAPHWAKE_USAGE_KEY)` | No key. |
 | warning `usage not sent: GRAPHWAKE_URL must be an http(s) URL` | The API URL is not `http` or `https`. |

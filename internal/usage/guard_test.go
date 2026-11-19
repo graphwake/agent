@@ -41,6 +41,14 @@ func TestLooksPersonal(t *testing.T) {
 		{"checkout-web-service-production-eu-west-1", false},
 		{"orders-fulfilment-service-production-api", false},
 		{"550e8400-e29b-41d4-a716-446655440000-extra", false},
+		// paths and URLs: a name that starts with "/", or contains "://" or "?"
+		{"/v1/orders/8812?token=abc", true},
+		{"/orders", true},
+		{"  /orders", true},
+		{"https://orders.example/a", true},
+		{"orders?page=2", true},
+		{"team/app", false},
+		{"a/b/c", false},
 		// ordinary caller names
 		{"checkout-web", false},
 		{"master", false},

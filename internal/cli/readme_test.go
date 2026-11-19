@@ -181,12 +181,143 @@ func TestReadme_usage_flags_table_matches_the_code(t *testing.T) {
 			}
 		}
 	}
-	variables := strings.Join(varCells, " ")
-	for _, name := range usageVariableNames(t) {
-		if !strings.Contains(variables, "`"+name+"`") && !strings.Contains(variables, "`"+name+"=") {
-			t.Errorf("variable %s is not in the README's usage flags table", name)
+	// Every variable the code reads is on the row of the flag it stands for, and the table names no other variable.
+	pairs := usageFlagVariables(t, want)
+	listed := map[string]string{} // variable -> the flag on its row
+	for row, cell := range varCells {
+		flags := codeSpans(flagCells[row])
+		for _, span := range codeSpans(cell) {
+			name, _, _ := strings.Cut(span, "=")
+			if !strings.HasPrefix(name, "GRAPHWAKE_") {
+				continue
+			}
+			if len(flags) != 1 {
+				t.Errorf("row of %s names %d flags, want 1", name, len(flags))
+				continue
+			}
+			listed[name] = flags[0]
 		}
 	}
+	read := usageVariableNames(t)
+	for _, name := range read {
+		flag, ok := listed[name]
+		switch {
+		case !ok:
+			t.Errorf("variable %s is not in the README's usage flags table", name)
+		case pairs[flag] != name:
+			t.Errorf("the README's usage flags table puts %s on the row of %s; the code reads it for %s", name, flag,
+				flagFor(pairs, name))
+		}
+	}
+	for name := range listed {
+		if !contains(read, name) {
+			t.Errorf("the README's usage flags table names %s, which graphwake usage does not read", name)
+		}
+	}
+}
+
+// usageFlagVariables pairs each flag with the variable that sets the same configuration field, found by running
+// parseUsage once with only the flag and once with only each variable, and comparing which field changed.
+func usageFlagVariables(t *testing.T, flags []string) map[string]string {
+	t.Helper()
+	none := func(string) string { return "" }
+	base, err := parseUsage(nil, none)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := func(c usageConfig) string {
+		b, v := reflect.ValueOf(base), reflect.ValueOf(c)
+		field := ""
+		for i := 0; i < v.NumField(); i++ {
+			if !reflect.DeepEqual(b.Field(i).Interface(), v.Field(i).Interface()) {
+				if field != "" {
+					t.Fatalf("more than one field changed: %s and %s", field, v.Type().Field(i).Name)
+				}
+				field = v.Type().Field(i).Name
+			}
+		}
+		return field
+	}
+	byField := map[string]string{} // configuration field -> variable
+	for _, name := range usageVariableNames(t) {
+		c, err := parseUsage(nil, func(n string) string {
+			if n == name {
+				return "true" // a valid value for every variable: a switch, a name or a URL check happens later
+			}
+			return ""
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if f := changed(c); f != "" {
+			byField[f] = name
+		}
+	}
+	pairs := map[string]string{}
+	for _, flag := range flags {
+		c, err := parseUsage([]string{flag + "=true"}, none)
+		if err != nil {
+			t.Fatalf("%s: %v", flag, err)
+		}
+		pairs[flag] = byField[changed(c)]
+	}
+	return pairs
+}
+
+func flagFor(pairs map[string]string, variable string) string {
+	for flag, v := range pairs {
+		if v == variable {
+			return flag
+		}
+	}
+	return "no flag"
+}
+
+// withheldProbes are names that each trip one rule of usage.LooksPersonal (a control character cannot be written in
+// a code span). The README's withheld-name list must show each as an example; a new guard rule needs a probe here.
+var withheldProbes = []string{
+	"jane@contoso.com", // e-mail address
+	"10.0.0.12:8080",   // IPv4 with a port
+	"10.0.0.12.nip.io", // IPv4 inside a host name
+	"2001:db8::1",      // IPv6
+	"dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk", // secret-like
+	"apikey=0123456789abcdef0123456789abcdef",     // 32+ hexadecimal characters
+	"x ##y",                     // "##"
+	"/v1/orders/8812?token=abc", // starts with "/"
+	"https://orders.example/a",  // contains "://"
+	"orders?page=2",             // contains "?"
+}
+
+func TestReadme_withheld_name_list_has_every_rule(t *testing.T) {
+	section := readmeSection(t, readFileT(t, readmePath), "### What the usage step sends")
+	start := strings.Index(section, "**Withheld caller names.**")
+	if start < 0 {
+		t.Fatal(`no "**Withheld caller names.**" paragraph under "### What the usage step sends"`)
+	}
+	list := section[start:]
+	if end := strings.Index(list, "\n\n**"); end >= 0 {
+		list = list[:end]
+	}
+	spans := codeSpans(list)
+	for _, probe := range withheldProbes {
+		if !usage.LooksPersonal(probe) {
+			t.Errorf("probe %q is not withheld by the guard", probe)
+		}
+		if !contains(spans, probe) {
+			t.Errorf("the README's withheld-name list has no example %q", probe)
+		}
+	}
+	// Every full example in the list is withheld (the list also quotes characters, such as "+/_=-", that are not).
+	for _, span := range spans {
+		if len(span) > 8 && !strings.HasPrefix(span, "withheld") && !usage.LooksPersonal(span) && !uuidLike(span) {
+			t.Errorf("the README's withheld-name list shows %q, which the guard does not withhold", span)
+		}
+	}
+}
+
+// uuidLike tells the canonical UUID the README names as not withheld.
+func uuidLike(s string) bool {
+	return regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`).MatchString(s)
 }
 
 var (
