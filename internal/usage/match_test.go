@@ -98,6 +98,34 @@ func TestMatch_server_url_base_path(t *testing.T) {
 	})
 }
 
+func TestMatch_shared_host_longest_base_path(t *testing.T) {
+	// The longer base path chooses the service, even where the shorter one has a matching template.
+	tpl := Templates{Services: []Service{
+		{ID: "root", Name: "gateway-root", ServerURLs: []string{"https://api.contoso.com"}, Endpoints: []Endpoint{
+			{ID: "r1", Method: "GET", Path: "/shop/orders/{}"},
+			{ID: "r2", Method: "GET", Path: "/health"},
+		}},
+		{ID: "shop", Name: "shop", ServerURLs: []string{"https://api.contoso.com/shop"}, Endpoints: []Endpoint{
+			{ID: "s1", Method: "GET", Path: "/carts/{}"},
+		}},
+	}}
+	runMatchCases(t, mustMatcher(t, tpl, ""), []matchCase{
+		{"longer base path wins, its template miss is unmatched", Record{Method: "GET", Host: "api.contoso.com", Path: "/shop/orders/1"}, "", ""},
+		{"longer base path wins", Record{Method: "GET", Host: "api.contoso.com", Path: "/shop/carts/1"}, "s1", "shop"},
+		{"only the shorter base path fits", Record{Method: "GET", Host: "api.contoso.com", Path: "/health"}, "r2", "gateway-root"},
+	})
+
+	// Two services with the same base path on one host: the record needs a mapping.
+	tpl = Templates{Services: []Service{
+		{ID: "a", Name: "a", ServerURLs: []string{"https://api.contoso.com/v1"}, Endpoints: []Endpoint{{ID: "a1", Method: "GET", Path: "/orders/{}"}}},
+		{ID: "b", Name: "b", ServerURLs: []string{"https://api.contoso.com/v1/"}, Endpoints: []Endpoint{{ID: "b1", Method: "GET", Path: "/carts/{}"}}},
+	}}
+	runMatchCases(t, mustMatcher(t, tpl, "a"), []matchCase{
+		{"equal base paths are ambiguous", Record{Method: "GET", Host: "api.contoso.com", Path: "/v1/orders/1"}, "", ""},
+		{"equal base paths, other template", Record{Method: "GET", Host: "api.contoso.com", Path: "/v1/carts/1"}, "", ""},
+	})
+}
+
 func TestMatch_pin_service(t *testing.T) {
 	m := mustMatcher(t, shop(), "orders")
 	runMatchCases(t, m, []matchCase{
@@ -107,6 +135,13 @@ func TestMatch_pin_service(t *testing.T) {
 		{"record service with relative server URL", Record{Method: "GET", Path: "/api/invoices/7", Service: "billing"}, "e10", "billing"},
 		{"unknown record service is unmatched", Record{Method: "GET", Path: "/orders/42", Service: "shipping"}, "", ""},
 		{"host match comes before the pin", Record{Method: "GET", Host: "billing.internal", Path: "/orders/42"}, "", ""},
+	})
+
+	// A known host decides alone: a path under none of its base paths is unmatched, not handed to the pin.
+	billingPin := mustMatcher(t, shop(), "billing")
+	runMatchCases(t, billingPin, []matchCase{
+		{"known host, no fitting base path, other pin", Record{Method: "GET", Host: "orders.internal", Path: "/invoices/7"}, "", ""},
+		{"unknown host goes to the pin", Record{Method: "GET", Host: "elsewhere.internal", Path: "/invoices/7"}, "e10", "billing"},
 	})
 
 	if _, err := NewMatcher(shop(), "shipping"); err == nil {

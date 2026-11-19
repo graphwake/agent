@@ -99,7 +99,7 @@ func (a *Aggregator) Snapshot(preset, agentVersion string) (Snapshot, error) {
 		rows = append(rows, row)
 		callers[[2]string{row.Caller, row.CallerKind}] = true
 	}
-	if limit := a.m.limits.MaxCallers; limit > 0 && len(callers) > limit {
+	if limit := a.m.limits.MaxCallers; len(callers) > limit {
 		return Snapshot{}, &TooManyCallersError{Callers: len(callers), Limit: limit}
 	}
 	sort.Slice(rows, func(i, j int) bool {

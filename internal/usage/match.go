@@ -40,6 +40,12 @@ type template struct {
 // to ("" = none); an unknown name is an error.
 func NewMatcher(t Templates, pinService string) (*Matcher, error) {
 	m := &Matcher{limits: t.Limits, mappings: t.Mappings, byID: map[string]*service{}, byName: map[string]*service{}}
+	if m.limits.MaxCallers <= 0 {
+		m.limits.MaxCallers = DefaultMaxCallers
+	}
+	if m.limits.MaxRows <= 0 {
+		m.limits.MaxRows = DefaultMaxRows
+	}
 	for _, s := range t.Services {
 		svc := &service{Service: s}
 		for _, raw := range s.ServerURLs {
@@ -98,9 +104,9 @@ func (m *Matcher) Match(r Record) (Endpoint, Service, bool) {
 		return svc.match(r.Method, stripPrefix(path, mp.StripPrefix))
 	}
 
-	// 2. A server URL with the record's host decides the service; its URL path is the base path.
+	// 2. A known host (any service's absolute server URL) decides alone; the longest fitting base path picks the service.
 	if r.Host != "" {
-		if e, s, ok, chosen := m.matchByHost(r, path); chosen {
+		if e, s, ok, known := m.matchByHost(r, path); known {
 			return e, s, ok
 		}
 	}
@@ -156,36 +162,35 @@ func (m *Matcher) bestMapping(r Record, path string) (Mapping, bool) {
 	return best, found
 }
 
-// matchByHost tries every service with a server URL on the record's host whose base path the request path starts
-// with. chosen is false when no such server URL exists, so the next step may try. The longest base path that gives a
-// match wins; two services matching under the same base path length are ambiguous and match nothing.
-func (m *Matcher) matchByHost(r Record, path string) (e Endpoint, s Service, ok, chosen bool) {
+// matchByHost decides records whose host is the host of any service's absolute server URL; known is false otherwise,
+// so the pin step may try. Among that host's server URLs whose base path the request path starts with (on a segment
+// boundary), the longest base path chooses the service, and only that service is tried. No fitting base path, or two
+// services sharing the longest one (the customer needs a mapping), is unmatched.
+func (m *Matcher) matchByHost(r Record, path string) (e Endpoint, s Service, ok, known bool) {
+	var chosen *service
+	base, ambiguous := "", false
 	bestLen := -1
-	ambiguous := false
 	for _, svc := range m.services {
 		for _, hb := range svc.hosts {
-			if !strings.EqualFold(hb.host, r.Host) || !hasSegmentPrefix(path, hb.base) {
+			if !strings.EqualFold(hb.host, r.Host) {
 				continue
 			}
-			chosen = true
-			ce, cs, cok := svc.match(r.Method, stripPrefix(path, hb.base))
-			if !cok || len(hb.base) < bestLen {
+			known = true
+			if !hasSegmentPrefix(path, hb.base) || len(hb.base) < bestLen {
 				continue
 			}
-			if len(hb.base) == bestLen && cs.ID != s.ID {
-				ambiguous = true
+			if len(hb.base) == bestLen {
+				ambiguous = ambiguous || svc != chosen
 				continue
 			}
-			if len(hb.base) > bestLen {
-				ambiguous = false
-			}
-			e, s, ok, bestLen = ce, cs, true, len(hb.base)
+			chosen, base, bestLen, ambiguous = svc, hb.base, len(hb.base), false
 		}
 	}
-	if ambiguous {
-		return Endpoint{}, Service{}, false, chosen
+	if chosen == nil || ambiguous {
+		return Endpoint{}, Service{}, false, known
 	}
-	return e, s, ok, chosen
+	e, s, ok = chosen.match(r.Method, stripPrefix(path, base))
+	return e, s, ok, known
 }
 
 // match finds the endpoint of this service with the method and a path that matches segment by segment. Among several,

@@ -2,6 +2,7 @@ package usage
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -152,10 +153,21 @@ func TestAggregate_too_many_callers(t *testing.T) {
 		t.Errorf("err = %#v, want Callers 3, Limit 2", err)
 	}
 
-	// No limit in the templates (0): not enforced locally.
-	b := NewAggregator(mustMatcher(t, shop(), ""), false)
-	add(b, "a", "b", "c")
-	if _, err := b.Snapshot("apim", "1.4.0"); err != nil {
-		t.Errorf("limit 0: %v", err)
+}
+
+func TestAggregate_default_caller_limit(t *testing.T) {
+	// No limit in the templates (0 or missing): the agent's default of 2000 applies.
+	a := NewAggregator(mustMatcher(t, shop(), ""), false)
+	for i := 0; i < DefaultMaxCallers; i++ {
+		a.Add(Record{Caller: fmt.Sprintf("caller-%d", i), Kind: "client", Method: "GET", Host: "orders.internal", Path: "/v1/orders/1", Count: 1, Day: "2026-11-12"})
+	}
+	if _, err := a.Snapshot("apim", "1.4.0"); err != nil {
+		t.Fatalf("2000 callers with the default limit: %v", err)
+	}
+	a.Add(Record{Caller: "one-too-many", Kind: "client", Method: "GET", Host: "orders.internal", Path: "/v1/orders/1", Count: 1, Day: "2026-11-12"})
+	_, err := a.Snapshot("apim", "1.4.0")
+	var tooMany *TooManyCallersError
+	if !errors.As(err, &tooMany) || tooMany.Callers != 2001 || tooMany.Limit != 2000 {
+		t.Errorf("2001 callers with the default limit: err = %v, want Callers 2001, Limit 2000", err)
 	}
 }

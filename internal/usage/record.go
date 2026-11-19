@@ -4,14 +4,17 @@
 package usage
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/graphwake/agent/internal/ingest"
 )
 
-// MaxBodyBytes is the backend's limit on the whole encoded request body (10 MB).
-const MaxBodyBytes = 10 * 1024 * 1024
+// The agent's own limits, used when the templates carry none (a missing or zero member). They equal the server's.
+const (
+	DefaultMaxCallers = 2000
+	DefaultMaxRows    = 50000
+)
 
 // Record is one request, or one pre-aggregated group of requests, read from the input.
 type Record struct {
@@ -42,7 +45,8 @@ type SourceInfo struct {
 	Preset string `json:"preset"`
 }
 
-// Limits are the server's limits for one snapshot. Zero means the server sent none; the server enforces them anyway.
+// Limits are the server's limits for one snapshot. Zero means the server sent none: DefaultMaxCallers and
+// DefaultMaxRows apply then.
 type Limits struct {
 	MaxCallers int `json:"maxCallers"`
 	MaxRows    int `json:"maxRows"`
@@ -86,7 +90,7 @@ type Snapshot struct {
 	AnonymousRequests int64  `json:"anonymousRequests"`
 	Rows              []Row  `json:"rows"`
 
-	// maxRows is Limits.MaxRows of the templates the snapshot was built from (0 = not enforced here). It is not
+	// maxRows is Limits.MaxRows of the templates the snapshot was built from (0 = DefaultMaxRows). It is not
 	// exported, so it is never encoded.
 	maxRows int
 }
@@ -133,21 +137,19 @@ func (e *TooManyCallersError) Unwrap() error { return ErrTooManyCallers }
 
 // Encode marshals the snapshot exactly as it is sent and enforces the row limit and the 10 MB limit on the result.
 func Encode(s Snapshot) ([]byte, error) {
-	if s.maxRows > 0 && len(s.Rows) > s.maxRows {
+	maxRows := s.maxRows
+	if maxRows <= 0 {
+		maxRows = DefaultMaxRows
+	}
+	if len(s.Rows) > maxRows {
 		return nil, ErrTooLarge
 	}
 	if s.Rows == nil {
 		s.Rows = []Row{}
 	}
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(s); err != nil {
-		return nil, err
-	}
-	data := bytes.TrimRight(buf.Bytes(), "\n")
-	if len(data) > MaxBodyBytes {
+	data, err := ingest.EncodeJSON(s)
+	if errors.Is(err, ingest.ErrOverMaxBody) {
 		return nil, ErrTooLarge
 	}
-	return data, nil
+	return data, err
 }

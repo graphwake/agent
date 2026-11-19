@@ -22,6 +22,12 @@ func TestLooksPersonal(t *testing.T) {
 		{"0123456789abcdef0123456789abcdef", true},
 		{"da39a3ee5e6b4b0d3255bfef95601890afd80709", true},    // 40-character lower-case hex
 		{"dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk", true}, // 43-character base64url
+		// a run of 32+ hex characters behind a label
+		{"apikey=0123456789abcdef0123456789abcdef", true},
+		{"token-da39a3ee5e6b4b0d3255bfef95601890afd80709", true},
+		{"svc_0123456789abcdef0123456789abcdef", true},
+		// an IPv4 literal with a dotted suffix
+		{"client 10.0.0.12.nip.io", true},
 		// long names that do not look random (no upper case, not pure hex)
 		{"checkout-web-service-production-eu-west-1", false},
 		{"orders-fulfilment-service-production-api", false},

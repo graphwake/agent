@@ -3,10 +3,13 @@ package usage
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/graphwake/agent/internal/ingest"
 )
 
 var (
@@ -123,7 +126,7 @@ func TestEncode_limits(t *testing.T) {
 		t.Errorf("two rows with MaxRows 1: err = %v, want ErrTooLarge", err)
 	}
 
-	big := Snapshot{Rows: []Row{{Caller: strings.Repeat("x", MaxBodyBytes)}}}
+	big := Snapshot{Rows: []Row{{Caller: strings.Repeat("x", ingest.MaxBodyBytes)}}}
 	if _, err := Encode(big); !errors.Is(err, ErrTooLarge) {
 		t.Errorf("body over 10 MB: err = %v, want ErrTooLarge", err)
 	}
@@ -134,5 +137,32 @@ func TestEncode_limits(t *testing.T) {
 	}
 	if !strings.Contains(string(body), `"/a/{}&<b>"`) || strings.HasSuffix(string(body), "\n") {
 		t.Errorf("body = %q, want no HTML escaping and no trailing newline", body)
+	}
+}
+
+func TestEncode_default_row_limit(t *testing.T) {
+	// No row limit in the templates (0 or missing): the agent's default of 50000 applies.
+	tpl := shop()
+	tpl.Limits = Limits{MaxCallers: 100000}
+	a := NewAggregator(mustMatcher(t, tpl, ""), false)
+	add := func(caller string) {
+		a.Add(Record{Caller: caller, Kind: "client", Method: "GET", Host: "orders.internal", Path: "/v1/orders/1", Count: 1, Day: "2026-11-12"})
+	}
+	for i := 0; i < DefaultMaxRows; i++ {
+		add(fmt.Sprintf("c%d", i))
+	}
+	s, err := a.Snapshot("apim", "1.4.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Encode(s); err != nil {
+		t.Fatalf("50000 rows with the default limit: %v", err)
+	}
+	add("one-too-many")
+	if s, err = a.Snapshot("apim", "1.4.0"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Encode(s); !errors.Is(err, ErrTooLarge) {
+		t.Errorf("50001 rows with the default limit: err = %v, want ErrTooLarge", err)
 	}
 }

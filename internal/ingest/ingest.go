@@ -53,17 +53,30 @@ type Body struct {
 // ErrBodyTooLarge: the encoded body is over MaxBodyBytes.
 var ErrBodyTooLarge = errors.New("spec too large (limit 10 MB), not sent")
 
+// ErrOverMaxBody: EncodeJSON's result is over MaxBodyBytes. Callers turn it into their own message.
+var ErrOverMaxBody = errors.New("encoded body over 10 MB")
+
 // Encode marshals the body exactly as it is sent and enforces the 10 MB limit on the result.
 func Encode(b Body) ([]byte, error) {
+	data, err := EncodeJSON(b)
+	if errors.Is(err, ErrOverMaxBody) {
+		return nil, ErrBodyTooLarge
+	}
+	return data, err
+}
+
+// EncodeJSON marshals any request body the way Graphwake's ingest endpoints take it (no HTML escaping, no trailing
+// newline) and returns ErrOverMaxBody when the result is over MaxBodyBytes.
+func EncodeJSON(v any) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
-	if err := enc.Encode(b); err != nil {
+	if err := enc.Encode(v); err != nil {
 		return nil, err
 	}
 	data := bytes.TrimRight(buf.Bytes(), "\n")
 	if len(data) > MaxBodyBytes {
-		return nil, ErrBodyTooLarge
+		return nil, ErrOverMaxBody
 	}
 	return data, nil
 }
