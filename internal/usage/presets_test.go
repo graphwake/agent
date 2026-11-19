@@ -135,12 +135,14 @@ func TestParsers_skip_bad_lines_and_count(t *testing.T) {
 			"f,client,,/x,1,2026-11-18\n" + // no method
 			"g,client,GET,/x,1,yesterday\n" + // not a date
 			"h,client,GET,/x,1,2026-11-18\n", 2, 6},
+		{"generic csv unclosed quote", "generic", "caller,method,path,lastSeen\na,GET,/x,2026-11-18\n\"" + marker + ",GET,/x,2026-11-18\nc,GET,/x,2026-11-18\n\"d, quoted\",GET,/x,2026-11-18\ne,GET,/x,2026-11-18\n", 4, 1},
 		{"generic json lines", "generic", `{"caller":"a","method":"GET","path":"/x","lastSeen":"2026-11-18"}` + "\n" + garbage + "\n" + `{"caller":"b","method":"GET","path":"/y","lastSeen":"2026-11-18"}`, 2, 1},
 		{"generic json array", "generic", `[{"caller":"a","method":"GET","path":"/x","lastSeen":"2026-11-18"}, "` + marker + `", {"caller":"b","method":{"x":1},"path":"/y","lastSeen":"2026-11-18"}, {"caller":"c","method":"GET","path":"/y","lastSeen":"2026-11-18"}]`, 2, 2},
 		{"apim json lines", "apim", apimRow + "\n" + garbage + "\n" + apimRow + "\n", 2, 1},
 		{"apim array", "apim", "[\n" + apimRow + ",\n42,\n\"" + marker + "\",\n" + strings.Replace(apimRow, `"Calls":"2"`, `"Calls":"`+marker+`"`, 1) + ",\n" + apimRow + "\n]", 2, 3},
 		{"apim broken array keeps what came before", "apim", "[\n" + apimRow + ",\n" + garbage + "\n" + apimRow + "\n]", 1, 1},
 		{"otel", "otel", otelLine + "\n" + garbage + "\n" + otelLine + "\n", 2, 1},
+		{"otel json array", "otel", "[" + otelLine + ",\n42,\n" + otelLine + "]", 2, 1},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -157,6 +159,43 @@ func TestParsers_skip_bad_lines_and_count(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSplitCSVLine(t *testing.T) {
+	cases := []struct {
+		line string
+		want []string // nil = broken
+	}{
+		{"a,b,c", []string{"a", "b", "c"}},
+		{"a,,c,", []string{"a", "", "c", ""}},
+		{`"mobile app, ios",GET`, []string{"mobile app, ios", "GET"}},
+		{`"say ""hi""", next`, []string{`say "hi"`, "next"}},
+		{`a, "b" ,c`, []string{"a", "b", "c"}},
+		{`"unclosed,GET,/x`, nil},
+		{`a"b,c`, nil},
+		{`"a"b,c`, nil},
+	}
+	for _, c := range cases {
+		got, ok := splitCSVLine(c.line)
+		if ok != (c.want != nil) || !reflect.DeepEqual(got, c.want) {
+			t.Errorf("splitCSVLine(%q) = %q, %v; want %q", c.line, got, ok, c.want)
+		}
+	}
+}
+
+func TestHostName(t *testing.T) {
+	for raw, want := range map[string]string{
+		"Gateway.Example:443":          "gateway.example",
+		"orders.internal":              "orders.internal",
+		"user:pw@Orders.Internal:8080": "orders.internal",
+		"user@orders.internal":         "orders.internal",
+		"[::1]:8080":                   "::1",
+		"":                             "",
+	} {
+		if got := hostName(raw); got != want {
+			t.Errorf("hostName(%q) = %q, want %q", raw, got, want)
+		}
 	}
 }
 

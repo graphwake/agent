@@ -2,8 +2,6 @@ package usage
 
 import (
 	"bufio"
-	"encoding/csv"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -47,70 +45,102 @@ func parseGeneric(r io.Reader, opts ParseOptions, emit func(Record)) (int64, err
 	return finish("generic", read, skipped, err)
 }
 
+// parseGenericCSV reads the CSV form one physical line at a time: a broken line (such as an unclosed quote) costs
+// that line alone, and memory stays bounded by the longest line. A quoted field cannot span lines.
 func parseGenericCSV(br *bufio.Reader, callerField string, emit func(Record)) (int64, error) {
-	cr := csv.NewReader(br)
-	cr.FieldsPerRecord = -1
-	cr.ReuseRecord = true
-	cr.TrimLeadingSpace = true
-
-	header, err := cr.Read()
-	if err != nil {
-		if !isCSVError(err) {
-			return finish("generic", 0, 0, err)
-		}
-		header = nil // a broken first line is no header
-	}
-	cols := map[string]int{}
-	for i, name := range header {
-		if key := strings.ToLower(strings.TrimSpace(name)); key != "" {
-			if _, dup := cols[key]; !dup {
-				cols[key] = i
+	var (
+		cols          map[string]int // lower-case column name → index; nil until the header is read
+		width         int
+		read, skipped int64
+		headerErr     error
+	)
+	err := eachLine(br, func(line []byte) bool {
+		fields, ok := splitCSVLine(string(line))
+		if cols == nil {
+			cols, width = map[string]int{}, len(fields)
+			for i, name := range fields {
+				if key := strings.ToLower(strings.TrimSpace(name)); key != "" {
+					if _, dup := cols[key]; !dup {
+						cols[key] = i
+					}
+				}
 			}
-		}
-	}
-	for _, name := range []string{callerField, "method", "path", "lastSeen"} {
-		if _, ok := cols[strings.ToLower(name)]; !ok {
-			return 0, fmt.Errorf("generic CSV input needs a header line with the columns %s (%s, method, path and lastSeen are required)", genericColumns, callerField)
-		}
-	}
-	width := len(header)
-
-	var read, skipped int64
-	for {
-		row, err := cr.Read()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			if isCSVError(err) {
-				skipped++
-				continue
+			for _, name := range []string{callerField, "method", "path", "lastSeen"} {
+				if _, found := cols[strings.ToLower(name)]; !found || !ok {
+					headerErr = fmt.Errorf("generic CSV input needs a header line with the columns %s (%s, method, path and lastSeen are required)", genericColumns, callerField)
+					return false
+				}
 			}
-			return finish("generic", read, skipped, err)
+			return true
 		}
-		if len(row) != width {
+		if !ok || len(fields) != width {
 			skipped++
-			continue
+			return true
 		}
 		rec, ok := genericRecord(func(name string) (string, bool) {
-			if i, ok := cols[strings.ToLower(name)]; ok {
-				return row[i], true
+			if i, found := cols[strings.ToLower(name)]; found {
+				return fields[i], true
 			}
 			return "", true
 		}, callerField)
 		if !ok {
 			skipped++
-			continue
+			return true
 		}
 		read++
 		emit(rec)
+		return true
+	})
+	if headerErr != nil {
+		return 0, headerErr
 	}
-	return finish("generic", read, skipped, nil)
+	return finish("generic", read, skipped, err)
 }
 
-func isCSVError(err error) bool {
-	var parse *csv.ParseError
-	return errors.As(err, &parse)
+// splitCSVLine splits one CSV line with RFC 4180 quoting: a field may be quoted, holding commas and doubled quotes.
+// Space before a field is dropped. ok is false for a quote that is not closed, a quote inside an unquoted field, or
+// text after a closing quote.
+func splitCSVLine(line string) (fields []string, ok bool) {
+	for {
+		line = strings.TrimLeft(line, " \t")
+		var field string
+		if strings.HasPrefix(line, `"`) {
+			var b strings.Builder
+			rest := line[1:]
+			for {
+				i := strings.IndexByte(rest, '"')
+				if i < 0 {
+					return nil, false
+				}
+				b.WriteString(rest[:i])
+				rest = rest[i+1:]
+				if !strings.HasPrefix(rest, `"`) {
+					break
+				}
+				b.WriteByte('"')
+				rest = rest[1:]
+			}
+			rest = strings.TrimLeft(rest, " \t")
+			if rest != "" && rest[0] != ',' {
+				return nil, false
+			}
+			field, line = b.String(), rest
+		} else {
+			i := strings.IndexByte(line, ',')
+			if i < 0 {
+				i = len(line)
+			}
+			field, line = line[:i], line[i:]
+			if strings.Contains(field, `"`) {
+				return nil, false
+			}
+		}
+		fields = append(fields, field)
+		if line == "" {
+			return fields, true
+		}
+		line = line[1:] // the comma
+	}
 }
 
 // genericRecord reads one row of the generic format through get.

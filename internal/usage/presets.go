@@ -93,18 +93,11 @@ func eachJSONValue(br *bufio.Reader, first byte, fn func(raw []byte) bool) (read
 		}
 	}
 	if first != '[' {
-		for {
-			line, err := br.ReadBytes('\n')
-			if line = bytes.TrimSpace(line); len(line) > 0 {
-				count(fn(line))
-			}
-			if err == io.EOF {
-				return read, skipped, nil
-			}
-			if err != nil {
-				return read, skipped, err
-			}
-		}
+		err := eachLine(br, func(line []byte) bool {
+			count(fn(line))
+			return true
+		})
+		return read, skipped, err
 	}
 
 	dec := json.NewDecoder(br)
@@ -128,6 +121,23 @@ func eachJSONValue(br *bufio.Reader, first byte, fn func(raw []byte) bool) (read
 		skipped++ // the array is cut short or broken
 	}
 	return read, skipped, nil
+}
+
+// eachLine calls fn for every non-blank line, trimmed, with no limit on the line length, until fn returns false.
+// err is a read error only.
+func eachLine(br *bufio.Reader, fn func(line []byte) bool) error {
+	for {
+		line, err := br.ReadBytes('\n')
+		if line = bytes.TrimSpace(line); len(line) > 0 && !fn(line) {
+			return nil
+		}
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
 }
 
 // isReadError tells a failure of the reader from a problem with the JSON text.
@@ -236,8 +246,11 @@ func requestPath(raw string) (string, bool) {
 	return raw, strings.HasPrefix(raw, "/")
 }
 
-// hostName lower-cases a host and drops its port.
+// hostName lower-cases a host and drops its user info and port.
 func hostName(raw string) string {
+	if i := strings.LastIndexByte(raw, '@'); i >= 0 {
+		raw = raw[i+1:] // user info
+	}
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return ""
