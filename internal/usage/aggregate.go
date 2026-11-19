@@ -34,7 +34,8 @@ func NewAggregator(m *Matcher, noCounts bool) *Aggregator {
 	return &Aggregator{m: m, noCounts: noCounts, rows: map[rowKey]*rowSum{}, unmatched: map[PrefixCount]int64{}}
 }
 
-// Add counts one record. The first rule that applies wins: no caller name (anonymous), a personal-looking name
+// Add counts one record. A caller that is a certificate subject is first reduced to its common name (see
+// subjectCommonName). Then the first rule that applies wins: no caller name (anonymous), a name the guard withholds
 // (withheld), no endpoint template (unmatched), else the record's row.
 func (a *Aggregator) Add(r Record) {
 	count := r.Count
@@ -51,6 +52,9 @@ func (a *Aggregator) Add(r Record) {
 	}
 
 	caller := strings.TrimSpace(r.Caller)
+	if cn, ok := subjectCommonName(caller); ok {
+		caller = cn
+	}
 	if caller == "" {
 		a.anonymousRequests = AddCount(a.anonymousRequests, count)
 		return

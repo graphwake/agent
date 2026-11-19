@@ -592,3 +592,28 @@ func TestUsage_body_as_caller_is_withheld(t *testing.T) {
 		t.Fatalf("%d posts", len(b.usagePosts))
 	}
 }
+
+// A certificate subject as the caller ($ssl_client_s_dn, mutual TLS) is reduced to its common name before the
+// withholding rules: the common name is sent, the other parts of the subject are not.
+func TestUsage_certificate_subject_as_caller_sends_the_common_name(t *testing.T) {
+	b := newBackend(t)
+	line := func(subject string) string {
+		return `{"time":"2026-11-18T10:00:00+00:00","method":"GET","host":"orders.internal","path":"/v1/orders/8812",` +
+			`"caller":"","ssl_client_s_dn":"` + subject + `"}` + "\n"
+	}
+	input := line("CN=checkout,OU=Payments,O=Acme,C=NL") + // RFC 2253 form
+		line("/C=NL/O=Acme/OU=Payments/CN=checkout") + // legacy form
+		line("CN=jane@example.com,O=Acme") + // the common name goes through the rules: an e-mail address
+		line("OU=Payments,O=Acme") // no common name: left as it is, and withheld
+	out := b.usageRun(t, run{args: []string{"--source", "nginx", "--caller-field", "ssl_client_s_dn", "--dry-run"},
+		stdin: strings.NewReader(input)}, true)
+	if !strings.Contains(out, `"caller":"checkout"`) || !strings.Contains(out, `"count":2`) ||
+		!strings.Contains(out, `"withheldRequests":2`) {
+		t.Fatalf("out =\n%s", out)
+	}
+	for _, leak := range []string{"Acme", "Payments", "NL", "jane", "CN=", "O="} {
+		if strings.Contains(out, leak) {
+			t.Fatalf("output contains %q:\n%s", leak, out)
+		}
+	}
+}

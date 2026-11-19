@@ -159,7 +159,8 @@ service:
 `
 	kong := `# Kong: log requests with the file-log plugin, then send the file.
 # Each line is one JSON object; Graphwake reads consumer, request.method, request.uri,
-# request.headers.host (or the host in request.url) and started_at, and nothing else.
+# request.headers.host (or the host in request.url) and started_at, and nothing else,
+# except the field you name with --caller-field.
 plugins:
   - name: file-log
     config:
