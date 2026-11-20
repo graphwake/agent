@@ -201,3 +201,38 @@ func TestMatch_api_mapping(t *testing.T) {
 		{"empty API never matches a set API", Record{Method: "GET", Host: "gw.contoso.com", Path: "/legacy/orders/5"}, "", ""},
 	})
 }
+
+// A template segment counts as a parameter only when it starts with "{" and ends with "}". A segment that mixes a
+// parameter with fixed text ("{id}.json", "{id}:cancel", "v{version}") is compared as fixed text, so a concrete
+// request does not match it; another template, such as /files/{id}, can still take the request. A segment such as
+// "{name}.{ext}" or "{a}x{b}" is one parameter and matches any non-empty segment.
+func TestMatch_parameter_inside_a_segment(t *testing.T) {
+	tpl := func(endpoints ...Endpoint) Templates {
+		return Templates{Services: []Service{{ID: "s1", Name: "files", Endpoints: endpoints}}}
+	}
+	m := mustMatcher(t, tpl(
+		Endpoint{ID: "json", Method: "GET", Path: "/files/{id}.json"},
+		Endpoint{ID: "cancel", Method: "POST", Path: "/orders/{id}:cancel"},
+		Endpoint{ID: "version", Method: "GET", Path: "/v{version}/x"},
+	), "files")
+	runMatchCases(t, m, []matchCase{
+		{"{id}.json with a concrete id", Record{Method: "GET", Path: "/files/12.json"}, "", ""},
+		{"{id}:cancel with a concrete id", Record{Method: "POST", Path: "/orders/12:cancel"}, "", ""},
+		{"v{version} with a concrete version", Record{Method: "GET", Path: "/v2/x"}, "", ""},
+		{"compared as fixed text", Record{Method: "GET", Path: "/files/{id}.json"}, "json", "files"},
+	})
+
+	m = mustMatcher(t, tpl(
+		Endpoint{ID: "json", Method: "GET", Path: "/files/{id}.json"},
+		Endpoint{ID: "file", Method: "GET", Path: "/files/{id}"},
+		Endpoint{ID: "name-ext", Method: "GET", Path: "/docs/{name}.{ext}"},
+		Endpoint{ID: "a-x-b", Method: "GET", Path: "/pairs/{a}x{b}"},
+	), "files")
+	runMatchCases(t, m, []matchCase{
+		{"another template takes the request", Record{Method: "GET", Path: "/files/12.json"}, "file", "files"},
+		{"{name}.{ext} is one parameter", Record{Method: "GET", Path: "/docs/readme.md"}, "name-ext", "files"},
+		{"{name}.{ext} matches a segment without a dot", Record{Method: "GET", Path: "/docs/readme"}, "name-ext", "files"},
+		{"{a}x{b} is one parameter", Record{Method: "GET", Path: "/pairs/anything"}, "a-x-b", "files"},
+		{"a parameter needs a segment", Record{Method: "GET", Path: "/docs/"}, "", ""},
+	})
+}

@@ -184,7 +184,8 @@ re-run sees a label added later.
 | 1 | Only with `--fail-on`, on an open pull request build on GitHub or Azure Repos, when Graphwake's check result is "failed". The comment is written first. |
 | 0 | Everything else: the spec was sent, nothing was sent, any warning. |
 
-`graphwake usage` never returns a non-zero code; see [Output and exit code](#output-and-exit-code).
+`graphwake usage` returns 0 for every error it handles; see [Output and exit code](#output-and-exit-code) for the two
+cases where it cannot.
 
 These never fail the build, with or without `--fail-on`; each is a warning:
 
@@ -523,8 +524,12 @@ the most of them wins), else the host of a service's server URL, else the servic
 `--service`. The method and the path, segment by segment, then pick the endpoint template. A request that matches
 no endpoint adds no row.
 
-**Known limits.** A template with a parameter inside a segment, such as `/files/{id}.json`, `/orders/{id}:cancel`
-or `/v{version}/x`, is not matched yet: requests to it count as matching no endpoint.
+**Known limits.** A template segment is a parameter only when it starts with `{` and ends with `}`. A segment that
+mixes a parameter with fixed text, such as `{id}.json` in `/files/{id}.json`, `{id}:cancel` in `/orders/{id}:cancel`
+or `v{version}` in `/v{version}/x`, is compared as fixed text, so a request such as `/files/12.json` does not match
+that template: it counts as matching no endpoint unless another template matches it (with `/files/{id}` in the
+list, that endpoint gets its count). A segment such as `{name}.{ext}` is one parameter and matches any non-empty
+segment.
 
 ### Supported sources
 
@@ -649,9 +654,11 @@ either: the table of unmatched requests by host and path prefix, and the content
 `--dry-run` prints that table to its output, which in CI is the job log, so the table is kept short and masked:
 each row starts with `- `, so no host or path from the input can begin a line as a CI command; it shows the first
 two segments of the path, and a segment with a digit, `@` or `%`, or longer than 24 characters, is printed as `*`
-(`/users/jane@contoso.com` as `/users/*`, `/v1/orders/8812` as `/*/orders`); it lists the 20 host and prefix pairs
-with the most requests, then `- and N more`. The agent keeps at most 2,000 pairs; the requests of any further pair
-are counted in one `- (other)` row.
+(`/users/jane@contoso.com` as `/users/*`, `/v1/orders/8812` as `/*/orders`). A host longer than 255 bytes is not
+kept: its requests are counted in one `- (other)` row. Of the other host and prefix pairs, the agent keeps the first
+2,000 distinct ones it sees; the requests of any later pair are counted in that `- (other)` row too. Of the kept
+pairs and the `- (other)` row, it prints the 20 with the most requests (`- (other)` can be one of them), then
+`- and N more`, where N is the number of rows not printed.
 
 **Withheld caller names.** A caller name is withheld when any of these applies, to the name as it stands after
 steps 1 and 2, or to the name as it is cut in step 4; its requests add no row and are counted in `withheldRequests`. Letters and
@@ -777,7 +784,14 @@ configuration). The usage key is never printed. Warnings use the CI's warning fo
 or an answer cut short (it ends early, or the next answer starts where its next bucket belongs); or an Application
 Insights API answer (the `tables` form) with an `error` member that is not null.
 
-The exit code is always 0: `graphwake usage` never fails the pipeline, whatever it prints.
+The exit code is 0 for every error the command handles: bad input, a network error, the key, the plan or a limit
+(refused by Graphwake or passed on this machine), an internal error. Whatever it prints, such an error does not fail
+the pipeline. It cannot exit 0 when the process is stopped before it finishes: when it runs out of memory and the Go
+runtime or the runner ends it (for example on one JSON value of several gigabytes: such a value is read whole, and
+only input read line by line has the 16 MB cap), or when the runner kills it because standard input is a pipe that
+is never closed and the job hits its timeout. That is why CI should pass `--input`. The examples below end with
+`|| echo ...`, so the step stays green when only the agent's process is stopped; a job that hits its timeout fails
+whatever the step runs.
 
 ### Running it on a schedule
 

@@ -23,7 +23,7 @@ Optional. Without it, Graphwake still needs only your spec.
 - **The usage key is never printed.** A dry run only fetches the endpoint list and never sends a summary.
 - **Incomplete exports are reported:** a Datadog answer with a status other than `done`, a warning or cut short, or an Application Insights API answer (the `tables` form) with an `error` member that is not null, adds "The export was incomplete (the tool reported a timeout or a warning)." to the result line. Datadog answers carry no dates, so their requests get the day the step runs.
 
-`graphwake usage` always exits 0 and prints one result line (`--dry-run` and `usage query` print several).
+`graphwake usage` exits 0 for every error it handles (bad input, network, key, plan, limits, an internal error) and prints one result line (`--dry-run` and `usage query` print several). It cannot exit 0 when the process is stopped before it finishes: when it runs out of memory (for example on one JSON value of several gigabytes, which is read whole; only input read line by line has the 16 MB cap) or when the runner kills it because standard input is a pipe that is never closed. That is why CI should pass `--input`.
 
 ### Install
 
