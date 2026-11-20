@@ -207,6 +207,9 @@ func usageSend(args []string, d Deps) int {
 	}
 	if cfg.DryRun {
 		usage.RenderDryRun(d.Out, s.body, s.unmatched, s.snap.WithheldRequests, s.snap.AnonymousRequests)
+		if s.skipped > 0 {
+			io.WriteString(d.Out, unreadLines(s.skipped)+"\n")
+		}
 		if s.partial {
 			io.WriteString(d.Out, "Note: the export was incomplete ("+partialReason+").\n")
 		}
@@ -387,6 +390,12 @@ func emptySummary(snap usage.Snapshot, requests int64) string {
 	return "nothing in the input matched an endpoint"
 }
 
+// unreadLines says how many lines or elements the preset could not read ("1 line could not be read."): a sentence of
+// the success line, and a line of its own after a --dry-run summary.
+func unreadLines(skipped int64) string {
+	return usage.Plural(skipped, "line", "lines") + " could not be read."
+}
+
 // usageNotes are the sentences after the success line: what was counted but not sent, the lines the parser
 // skipped, the rows the server did not accept and, last, whether the tool said its export is incomplete.
 func usageNotes(snap usage.Snapshot, skipped, notAccepted int64, partial bool) string {
@@ -403,7 +412,7 @@ func usageNotes(snap usage.Snapshot, skipped, notAccepted int64, partial bool) s
 		b.WriteString(" " + usage.Plural(n, "request", "requests") + " were withheld because the caller name looked personal.")
 	}
 	if skipped > 0 {
-		b.WriteString(" " + usage.Plural(skipped, "line", "lines") + " could not be read.")
+		b.WriteString(" " + unreadLines(skipped))
 	}
 	if notAccepted == 1 {
 		b.WriteString(" 1 row was not accepted.")

@@ -153,7 +153,7 @@ func TestUsage_dry_run_sends_nothing(t *testing.T) {
 	}
 	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
 	if lines[0] != "--- would send ---" || lines[2] != "--- end ---" ||
-		lines[len(lines)-1] != "  Requests without a caller name: 7" {
+		lines[len(lines)-2] != "  Requests without a caller name: 7" || lines[len(lines)-1] != "1 line could not be read." {
 		t.Fatalf("out =\n%s", out)
 	}
 	var snap usage.Snapshot
@@ -550,6 +550,40 @@ func TestUsage_dry_run_says_when_nothing_would_be_sent(t *testing.T) {
 	out = b.usageRun(t, run{args: []string{"--source", "generic", "--input", writeInput(t, usageCSV), "--dry-run"}}, true)
 	if strings.Contains(out, "Note:") {
 		t.Fatalf("summary with rows: out =\n%s", out)
+	}
+	if len(b.usagePosts) != 0 {
+		t.Fatalf("%d posts", len(b.usagePosts))
+	}
+}
+
+// The dry run says how many lines could not be read, in the success line's words, right after the "Not sent to
+// Graphwake:" block (a line over the 16 MB cap counts too); with none it prints nothing about them.
+func TestUsage_dry_run_prints_the_skipped_lines(t *testing.T) {
+	const header = "caller,callerKind,service,method,path,count,lastSeen\n"
+	const good = "checkout-web,client,orders,GET,/v1/orders/8812,42,2026-11-18\n"
+	b := newBackend(t)
+	tooLong := "checkout-web,client,orders,GET,/v1/" + strings.Repeat("x", 16<<20) + ",1,2026-11-18\n"
+	out := b.usageRun(t, run{args: []string{"--source", "generic", "--input",
+		writeInput(t, header+good+"not,enough\n"+tooLong+good), "--dry-run"}}, true)
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	if lines[len(lines)-2] != "  Requests without a caller name: 0" || lines[len(lines)-1] != "2 lines could not be read." ||
+		strings.Count(out, "could not be read") != 1 || strings.Contains(out, "xxxx") {
+		t.Fatalf("out =\n%.3000s", out)
+	}
+
+	// Before the notes: the no-rows note stays the last line.
+	out = b.usageRun(t, run{args: []string{"--source", "generic", "--dry-run"},
+		stdin: strings.NewReader(header + "app,client,,GET,/nothing/here,1,2026-11-18\nnot,enough\n")}, true)
+	lines = strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	if lines[len(lines)-2] != "1 line could not be read." ||
+		lines[len(lines)-1] != "Note: this summary has no rows, so it would not be sent." {
+		t.Fatalf("out =\n%s", out)
+	}
+
+	// None skipped: no such line.
+	out = b.usageRun(t, run{args: []string{"--source", "generic", "--input", writeInput(t, header+good), "--dry-run"}}, true)
+	if strings.Contains(out, "could not be read") || !strings.HasSuffix(out, "\n  Requests without a caller name: 0\n") {
+		t.Fatalf("out =\n%s", out)
 	}
 	if len(b.usagePosts) != 0 {
 		t.Fatalf("%d posts", len(b.usagePosts))

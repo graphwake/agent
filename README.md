@@ -740,6 +740,7 @@ configuration). The usage key is never printed. Warnings use the CI's warning fo
 | `... 1 line could not be read.` | Added to the sent line: lines or elements the preset skipped. |
 | `... 4 rows were not accepted.` | Added to the sent line: rows Graphwake did not take. |
 | `... The export was incomplete (the tool reported a timeout or a warning).` | Added to the sent line, last. What the export held was sent. |
+| `1 line could not be read.` | Printed after a `--dry-run` summary when the preset skipped lines or elements (`2 lines could not be read.` for more); nothing when it skipped none. |
 | `Note: the export was incomplete (the tool reported a timeout or a warning).` | Printed after a `--dry-run` summary when the export was incomplete. |
 | `Note: this summary has no rows, so it would not be sent.` | The last line of a `--dry-run` whose summary has no rows: the same run without `--dry-run` sends nothing and warns why. |
 | warning `usage not sent: no source given (one of: apim, appinsights, datadog, generic, kong, nginx, otel)` | No `--source`. An unknown name gives `unknown source "<name>" (one of: ...)`; the name is repeated only when it is up to 20 lower-case letters, digits and hyphens, else the line is `unknown source (one of: ...)`. |
