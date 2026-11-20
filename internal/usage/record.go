@@ -114,7 +114,7 @@ type PrefixCount struct {
 	Prefix string
 	Count  int64
 	// Other marks the one entry that counts the requests of every host and prefix past the table's cap
-	// (maxUnmatchedKeys); its Host and Prefix are empty.
+	// (maxUnmatchedKeys) and of every host longer than maxHostBytes; its Host and Prefix are empty.
 	Other bool
 }
 

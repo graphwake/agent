@@ -14,9 +14,14 @@ const maxCallerRunes = 200
 // counted in one "(other)" entry.
 const maxUnmatchedKeys = 2000
 
+// maxHostBytes is the longest host the local table of unmatched requests keeps as a key (the longest DNS name is 253
+// characters); the requests of a longer host are counted in the "(other)" entry, so neither the table's memory nor
+// the printed table grows with the size of a host.
+const maxHostBytes = 255
+
 // Aggregator sums records into snapshot rows. Anonymous, withheld and unmatched requests add no row and are only
 // counted in the summary; nothing of their caller names or paths is sent. The host and the masked path prefix of
-// unmatched requests are kept for the --dry-run table alone (see pathPrefix and maxUnmatchedKeys).
+// unmatched requests are kept for the --dry-run table alone (see pathPrefix, maxUnmatchedKeys and maxHostBytes).
 type Aggregator struct {
 	m         *Matcher
 	noCounts  bool
@@ -24,7 +29,7 @@ type Aggregator struct {
 	callers   map[[2]string]bool    // the distinct caller name and kind pairs of rows
 	unmatched map[PrefixCount]int64 // keyed by Host and Prefix; Count is 0 in the key
 
-	unmatchedOther                                         int64 // requests of the hosts and prefixes past maxUnmatchedKeys
+	unmatchedOther                                         int64 // requests past maxUnmatchedKeys or with a host over maxHostBytes
 	tooManyCallers, tooManyRows                            bool  // a limit was passed: no row was kept for it
 	unmatchedRequests, withheldRequests, anonymousRequests int64
 	windowStart, windowEnd                                 string
@@ -84,6 +89,10 @@ func (a *Aggregator) Add(r Record) {
 	e, s, ok := a.m.Match(r)
 	if !ok {
 		a.unmatchedRequests = AddCount(a.unmatchedRequests, count)
+		if len(r.Host) > maxHostBytes {
+			a.unmatchedOther = AddCount(a.unmatchedOther, count)
+			return
+		}
 		key := PrefixCount{Host: r.Host, Prefix: pathPrefix(r.Path)}
 		if _, known := a.unmatched[key]; known || len(a.unmatched) < maxUnmatchedKeys {
 			a.unmatched[key] = AddCount(a.unmatched[key], count)
@@ -167,8 +176,8 @@ func (a *Aggregator) Snapshot(preset, agentVersion string) (Snapshot, error) {
 }
 
 // UnmatchedByPrefix lists the unmatched requests by host and first two path segments, most requests first, with
-// the "(other)" entry (Other) for the hosts and prefixes past maxUnmatchedKeys. It is for the local --dry-run table
-// only and is never sent.
+// the "(other)" entry (Other) for the hosts and prefixes past maxUnmatchedKeys and the hosts longer than
+// maxHostBytes. It is for the local --dry-run table only and is never sent.
 func (a *Aggregator) UnmatchedByPrefix() []PrefixCount {
 	list := make([]PrefixCount, 0, len(a.unmatched)+1)
 	for key, n := range a.unmatched {

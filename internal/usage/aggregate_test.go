@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"math"
@@ -225,6 +226,50 @@ func TestAggregate_unmatched_table_is_capped(t *testing.T) {
 	// Most requests first: the "(other)" entry (3000) leads, then host-0 (6).
 	if total != hosts+5 || other != 3000 || !list[0].Other || list[1].Host != "host-0.example" || list[1].Count != 6 {
 		t.Fatalf("total %d, other %d, first two %+v %+v; want %d, 3000, (other) then host-0", total, other, list[0], list[1], hosts+5)
+	}
+}
+
+// A host longer than maxHostBytes is not kept as a key of the unmatched table: its requests are counted in the
+// "(other)" entry, so neither the table's memory nor the printed table grows with the size of a host. A host of
+// exactly maxHostBytes is kept.
+func TestAggregate_long_host_counts_as_other(t *testing.T) {
+	a := NewAggregator(mustMatcher(t, shop(), ""), false)
+	edge := strings.Repeat("h", maxHostBytes)
+	a.Add(Record{Caller: "checkout-web", Kind: "client", Method: "GET", Host: edge, Path: "/nope/x", Count: 2, Day: "2026-11-12"})
+	a.Add(Record{Caller: "checkout-web", Kind: "client", Method: "GET", Host: edge + "h", Path: "/nope/x", Count: 3, Day: "2026-11-12"})
+	list := a.UnmatchedByPrefix()
+	if len(list) != 2 || list[0].Other != true || list[0].Count != 3 || list[1].Host != edge || list[1].Count != 2 {
+		t.Fatalf("list = %d entries; first %v %d, second host of %d bytes, %d", len(list), list[0].Other, list[0].Count,
+			len(list[1].Host), list[1].Count)
+	}
+	snap, err := a.Snapshot("nginx", "test")
+	if err != nil || snap.UnmatchedRequests != 5 {
+		t.Fatalf("unmatchedRequests = %d (err %v), want 5", snap.UnmatchedRequests, err)
+	}
+
+	// Generated NGINX lines with multi-megabyte hosts: the keys stay bounded in bytes, and no such host is printed.
+	var in strings.Builder
+	const lines = 6
+	for i := 0; i < lines; i++ {
+		host := strings.Repeat(string(rune('a'+i)), 3<<20) + ".example"
+		fmt.Fprintf(&in, `{"time":"2026-11-18T09:12:44+00:00","method":"GET","host":"%s","path":"/nope/x","caller":"checkout-web"}`+"\n", host)
+	}
+	a = NewAggregator(mustMatcher(t, shop(), ""), false)
+	res, err := nginxPreset.Parse(strings.NewReader(in.String()), ParseOptions{}, a.Add)
+	if err != nil || res.Skipped != 0 {
+		t.Fatalf("parse: skipped %d, err %v", res.Skipped, err)
+	}
+	keyBytes := 0
+	for key := range a.unmatched {
+		keyBytes += len(key.Host) + len(key.Prefix)
+	}
+	if keyBytes > maxHostBytes+64 {
+		t.Fatalf("unmatched table keys hold %d bytes", keyBytes)
+	}
+	var out bytes.Buffer
+	RenderDryRun(&out, []byte(`{}`), a.UnmatchedByPrefix(), 0, 0)
+	if out.Len() > 4096 || strings.Contains(out.String(), "aaaa") || !strings.Contains(out.String(), "\n    - (other)  6\n") {
+		t.Fatalf("dry-run output of %d bytes:\n%.2000s", out.Len(), out.String())
 	}
 }
 
